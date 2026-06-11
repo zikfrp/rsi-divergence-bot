@@ -26,14 +26,14 @@ bot = Bot(token=TELEGRAM_TOKEN)
 
 app = FastAPI()
 
-@app.get("/health")
+@app.get("/health") 
 async def health():
-    return {"status": "alive", "time": datetime.datetime.now().isoformat(), "exchange": "Bybit"}
+    return {"status": "alive", "time": datetime.datetime.now().isoformat(), "exchange": "OKX"}
 
 async def send_alert(message):
     try:
         await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message, parse_mode='HTML')
-        print(f"✅ Alert sent")
+        print(f"✅ Alert sent at {datetime.datetime.now()}")
     except Exception as e:
         print(f"Telegram error: {e}")
 
@@ -44,7 +44,7 @@ def fetch_ohlcv(exchange, symbol, timeframe, limit=300):
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
         return df
     except Exception as e:
-        print(f"❌ Error fetching {symbol} {timeframe}: {str(e)[:150]}")
+        print(f"❌ Error fetching {symbol} {timeframe}: {str(e)[:200]}")
         return None
 
 def detect_rsi_divergence(df, symbol, tf_name):
@@ -68,16 +68,16 @@ def detect_rsi_divergence(df, symbol, tf_name):
             if price[p2] > price[p1] and rsi_vals[p2] < rsi_vals[p1]:
                 return "🔴 **Bearish RSI Divergence**", "Price HH | RSI LH"
     except Exception as e:
-        print(f"Detection error {symbol} {tf_name}: {e}")
+        print(f"Detection error on {symbol} {tf_name}: {e}")
     return None, None
 
 async def main():
-    exchange = ccxt.bybit({
+    exchange = ccxt.okx({
         'enableRateLimit': True,
         'options': {'defaultType': 'spot'}
     })
     
-    print("🤖 RSI Divergence Bot Started (Bybit)")
+    print("🤖 RSI Divergence Bot Started (OKX)")
 
     last_alert_time = {}
     
@@ -112,5 +112,5 @@ def run_web_server():
 if __name__ == "__main__":
     server_thread = threading.Thread(target=run_web_server, daemon=True)
     server_thread.start()
-    print("🌐 Health check running")
+    print("🌐 Health check running on port 8000")
     asyncio.run(main())
