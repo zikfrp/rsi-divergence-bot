@@ -15,8 +15,8 @@ import threading
 TELEGRAM_TOKEN = "8864441483:AAGa3UpekRTIIBF6djF9wjRkNEhc8SmRK14"
 TELEGRAM_CHAT_ID = 1405093484
 
-SYMBOLS = ['XAUUSDT', 'EURUSDT']
-TIMEFRAMES = ['5m', '15m', '30m', '1h', '4h']
+SYMBOLS = ['XAUUSDT']                    # Only XAUUSDT
+TIMEFRAMES = ['15m', '30m', '1h', '4h']  # Removed M5
 
 RSI_PERIOD = 14
 LOOKBACK = 60
@@ -28,7 +28,7 @@ app = FastAPI()
 
 @app.get("/health")
 async def health():
-    return {"status": "alive", "time": datetime.datetime.now().isoformat(), "exchange": "Bybit"}
+    return {"status": "alive", "time": datetime.datetime.now().isoformat(), "exchange": "Bybit", "symbols": "XAUUSDT"}
 
 async def send_alert(message):
     try:
@@ -45,7 +45,7 @@ def fetch_ohlcv(exchange, symbol, timeframe, limit=250):
         print(f"✅ Fetched {symbol} {timeframe} - {len(df)} candles")
         return df
     except Exception as e:
-        print(f"❌ Error fetching {symbol} {timeframe}: {str(e)[:120]}")
+        print(f"❌ Error fetching {symbol} {timeframe}: {str(e)[:150]}")
         return None
 
 def detect_rsi_divergence(df, symbol, tf_name):
@@ -78,18 +78,16 @@ async def main():
         'options': {'defaultType': 'spot'}
     })
     
-    print("🤖 RSI Divergence Bot Started (Bybit Spot)")
+    print("🤖 RSI Divergence Bot Started (Bybit - XAUUSDT only)")
 
     last_alert_time = {}
     
     while True:
-        success_count = 0
         for symbol in SYMBOLS:
             for tf in TIMEFRAMES:
                 key = f"{symbol}_{tf}"
                 df = fetch_ohlcv(exchange, symbol, tf)
                 if df is not None:
-                    success_count += 1
                     signal, details = detect_rsi_divergence(df, symbol, tf)
                     if signal:
                         now = time.time()
@@ -107,9 +105,9 @@ async def main():
                             await send_alert(message.strip())
                             last_alert_time[key] = now
                             await asyncio.sleep(3)
-                await asyncio.sleep(1)  # Small delay between requests
+                await asyncio.sleep(2)   # Gentle delay
         
-        print(f"✅ Cycle complete. Successfully fetched {success_count} charts.")
+        print("✅ Cycle completed. Waiting 60 seconds...")
         await asyncio.sleep(60)
 
 def run_web_server():
