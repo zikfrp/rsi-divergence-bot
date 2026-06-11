@@ -15,7 +15,7 @@ import threading
 TELEGRAM_TOKEN = "8864441483:AAGa3UpekRTIIBF6djF9wjRkNEhc8SmRK14"
 TELEGRAM_CHAT_ID = 1405093484
 
-SYMBOLS = ['XAU/USDT', 'EUR/USDT']   # KuCoin format
+SYMBOLS = ['XAUUSDT', 'EURUSDT']
 TIMEFRAMES = ['5m', '15m', '30m', '1h', '4h']
 
 RSI_PERIOD = 14
@@ -28,23 +28,24 @@ app = FastAPI()
 
 @app.get("/health")
 async def health():
-    return {"status": "alive", "time": datetime.datetime.now().isoformat(), "exchange": "KuCoin"}
+    return {"status": "alive", "time": datetime.datetime.now().isoformat(), "exchange": "Bybit"}
 
 async def send_alert(message):
     try:
         await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message, parse_mode='HTML')
-        print(f"✅ Alert sent")
+        print(f"✅ Alert sent at {datetime.datetime.now()}")
     except Exception as e:
         print(f"Telegram error: {e}")
 
-def fetch_ohlcv(exchange, symbol, timeframe, limit=300):
+def fetch_ohlcv(exchange, symbol, timeframe, limit=250):
     try:
         ohlcv = exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
         df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+        print(f"✅ Fetched {symbol} {timeframe} - {len(df)} candles")
         return df
     except Exception as e:
-        print(f"❌ Error fetching {symbol} {timeframe}: {str(e)[:150]}")
+        print(f"❌ Error fetching {symbol} {timeframe}: {str(e)[:120]}")
         return None
 
 def detect_rsi_divergence(df, symbol, tf_name):
@@ -72,21 +73,23 @@ def detect_rsi_divergence(df, symbol, tf_name):
     return None, None
 
 async def main():
-    exchange = ccxt.kucoin({
+    exchange = ccxt.bybit({
         'enableRateLimit': True,
         'options': {'defaultType': 'spot'}
     })
     
-    print("🤖 RSI Divergence Bot Started (KuCoin)")
+    print("🤖 RSI Divergence Bot Started (Bybit Spot)")
 
     last_alert_time = {}
     
     while True:
+        success_count = 0
         for symbol in SYMBOLS:
             for tf in TIMEFRAMES:
                 key = f"{symbol}_{tf}"
                 df = fetch_ohlcv(exchange, symbol, tf)
                 if df is not None:
+                    success_count += 1
                     signal, details = detect_rsi_divergence(df, symbol, tf)
                     if signal:
                         now = time.time()
@@ -104,6 +107,9 @@ async def main():
                             await send_alert(message.strip())
                             last_alert_time[key] = now
                             await asyncio.sleep(3)
+                await asyncio.sleep(1)  # Small delay between requests
+        
+        print(f"✅ Cycle complete. Successfully fetched {success_count} charts.")
         await asyncio.sleep(60)
 
 def run_web_server():
