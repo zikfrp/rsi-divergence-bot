@@ -7,7 +7,6 @@ import time
 import asyncio
 from telegram import Bot
 import datetime
-import os
 from fastapi import FastAPI
 import uvicorn
 import threading
@@ -33,7 +32,7 @@ async def health():
     return {
         "status": "alive", 
         "time": datetime.datetime.now().isoformat(),
-        "bot": "RSI Divergence Alert Bot"
+        "bot": "RSI Divergence Alert Bot (Bybit)"
     }
 
 async def send_alert(message):
@@ -54,39 +53,42 @@ def fetch_ohlcv(exchange, symbol, timeframe, limit=300):
         return None
 
 def detect_rsi_divergence(df, symbol, tf_name):
-    if len(df) < LOOKBACK:
+    if df is None or len(df) < LOOKBACK:
         return None, None
     
-    close = df['close']
-    rsi = ta.rsi(close, length=RSI_PERIOD)
-    
-    price = close.iloc[-LOOKBACK:].values
-    rsi_vals = rsi.iloc[-LOOKBACK:].values
-    
-    max_idx = argrelextrema(price, np.greater, order=EXTREMA_ORDER)[0]
-    min_idx = argrelextrema(price, np.less, order=EXTREMA_ORDER)[0]
-    
-    # Bullish Divergence
-    if len(min_idx) >= 2:
-        p1, p2 = min_idx[-2:]
-        if price[p2] < price[p1] and rsi_vals[p2] > rsi_vals[p1]:
-            return "🟢 **Bullish RSI Divergence**", "Price Lower Low | RSI Higher Low"
-    
-    # Bearish Divergence
-    if len(max_idx) >= 2:
-        p1, p2 = max_idx[-2:]
-        if price[p2] > price[p1] and rsi_vals[p2] < rsi_vals[p1]:
-            return "🔴 **Bearish RSI Divergence**", "Price Higher High | RSI Lower High"
+    try:
+        close = df['close']
+        rsi = ta.rsi(close, length=RSI_PERIOD)
+        
+        price = close.iloc[-LOOKBACK:].values
+        rsi_vals = rsi.iloc[-LOOKBACK:].values
+        
+        max_idx = argrelextrema(price, np.greater, order=EXTREMA_ORDER)[0]
+        min_idx = argrelextrema(price, np.less, order=EXTREMA_ORDER)[0]
+        
+        # Bullish Divergence
+        if len(min_idx) >= 2:
+            p1, p2 = min_idx[-2:]
+            if price[p2] < price[p1] and rsi_vals[p2] > rsi_vals[p1]:
+                return "🟢 **Bullish RSI Divergence**", "Price Lower Low | RSI Higher Low"
+        
+        # Bearish Divergence
+        if len(max_idx) >= 2:
+            p1, p2 = max_idx[-2:]
+            if price[p2] > price[p1] and rsi_vals[p2] < rsi_vals[p1]:
+                return "🔴 **Bearish RSI Divergence**", "Price Higher High | RSI Lower High"
+    except Exception as e:
+        print(f"Divergence detection error on {symbol} {tf_name}: {e}")
     
     return None, None
 
 async def main():
-    exchange = ccxt.binance({
+    exchange = ccxt.bybit({
         'enableRateLimit': True,
         'options': {'defaultType': 'spot'}
     })
     
-    print("🤖 RSI Divergence Bot Started - Monitoring XAUUSDT & EURUSDT")
+    print("🤖 RSI Divergence Bot Started - Monitoring XAUUSDT & EURUSDT on Bybit")
     
     last_alert_time = {}
     
@@ -122,7 +124,7 @@ def run_web_server():
     uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
 
 if __name__ == "__main__":
-    # Start health check server in background
+    # Start health check server
     server_thread = threading.Thread(target=run_web_server, daemon=True)
     server_thread.start()
     print("🌐 Health check server running on port 8000")
