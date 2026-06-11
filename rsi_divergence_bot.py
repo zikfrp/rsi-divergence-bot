@@ -15,7 +15,7 @@ import threading
 TELEGRAM_TOKEN = "8864441483:AAGa3UpekRTIIBF6djF9wjRkNEhc8SmRK14"
 TELEGRAM_CHAT_ID = 1405093484
 
-SYMBOLS = ['XAUUSDT', 'EURUSDT']
+SYMBOLS = ['XAU/USDT', 'EUR/USDT']   # KuCoin format
 TIMEFRAMES = ['5m', '15m', '30m', '1h', '4h']
 
 RSI_PERIOD = 14
@@ -26,14 +26,14 @@ bot = Bot(token=TELEGRAM_TOKEN)
 
 app = FastAPI()
 
-@app.get("/health") 
+@app.get("/health")
 async def health():
-    return {"status": "alive", "time": datetime.datetime.now().isoformat(), "exchange": "OKX"}
+    return {"status": "alive", "time": datetime.datetime.now().isoformat(), "exchange": "KuCoin"}
 
 async def send_alert(message):
     try:
         await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message, parse_mode='HTML')
-        print(f"✅ Alert sent at {datetime.datetime.now()}")
+        print(f"✅ Alert sent")
     except Exception as e:
         print(f"Telegram error: {e}")
 
@@ -44,7 +44,7 @@ def fetch_ohlcv(exchange, symbol, timeframe, limit=300):
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
         return df
     except Exception as e:
-        print(f"❌ Error fetching {symbol} {timeframe}: {str(e)[:200]}")
+        print(f"❌ Error fetching {symbol} {timeframe}: {str(e)[:150]}")
         return None
 
 def detect_rsi_divergence(df, symbol, tf_name):
@@ -68,16 +68,16 @@ def detect_rsi_divergence(df, symbol, tf_name):
             if price[p2] > price[p1] and rsi_vals[p2] < rsi_vals[p1]:
                 return "🔴 **Bearish RSI Divergence**", "Price HH | RSI LH"
     except Exception as e:
-        print(f"Detection error on {symbol} {tf_name}: {e}")
+        print(f"Detection error {symbol} {tf_name}: {e}")
     return None, None
 
 async def main():
-    exchange = ccxt.okx({
+    exchange = ccxt.kucoin({
         'enableRateLimit': True,
         'options': {'defaultType': 'spot'}
     })
     
-    print("🤖 RSI Divergence Bot Started (OKX)")
+    print("🤖 RSI Divergence Bot Started (KuCoin)")
 
     last_alert_time = {}
     
