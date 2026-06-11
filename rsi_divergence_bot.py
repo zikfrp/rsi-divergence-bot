@@ -24,21 +24,16 @@ EXTREMA_ORDER = 5
 
 bot = Bot(token=TELEGRAM_TOKEN)
 
-# FastAPI Health Check
 app = FastAPI()
 
 @app.get("/health")
 async def health():
-    return {
-        "status": "alive", 
-        "time": datetime.datetime.now().isoformat(),
-        "bot": "RSI Divergence Alert Bot (Bybit)"
-    }
+    return {"status": "alive", "time": datetime.datetime.now().isoformat(), "exchange": "Bybit"}
 
 async def send_alert(message):
     try:
         await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message, parse_mode='HTML')
-        print(f"✅ Alert sent at {datetime.datetime.now()}")
+        print(f"✅ Alert sent")
     except Exception as e:
         print(f"Telegram error: {e}")
 
@@ -49,37 +44,31 @@ def fetch_ohlcv(exchange, symbol, timeframe, limit=300):
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
         return df
     except Exception as e:
-        print(f"Error fetching {symbol} {timeframe}: {e}")
+        print(f"❌ Error fetching {symbol} {timeframe}: {str(e)[:150]}")
         return None
 
 def detect_rsi_divergence(df, symbol, tf_name):
     if df is None or len(df) < LOOKBACK:
         return None, None
-    
     try:
         close = df['close']
         rsi = ta.rsi(close, length=RSI_PERIOD)
-        
         price = close.iloc[-LOOKBACK:].values
         rsi_vals = rsi.iloc[-LOOKBACK:].values
-        
+
         max_idx = argrelextrema(price, np.greater, order=EXTREMA_ORDER)[0]
         min_idx = argrelextrema(price, np.less, order=EXTREMA_ORDER)[0]
-        
-        # Bullish Divergence
+
         if len(min_idx) >= 2:
             p1, p2 = min_idx[-2:]
             if price[p2] < price[p1] and rsi_vals[p2] > rsi_vals[p1]:
-                return "🟢 **Bullish RSI Divergence**", "Price Lower Low | RSI Higher Low"
-        
-        # Bearish Divergence
+                return "🟢 **Bullish RSI Divergence**", "Price LL | RSI HL"
         if len(max_idx) >= 2:
             p1, p2 = max_idx[-2:]
             if price[p2] > price[p1] and rsi_vals[p2] < rsi_vals[p1]:
-                return "🔴 **Bearish RSI Divergence**", "Price Higher High | RSI Lower High"
+                return "🔴 **Bearish RSI Divergence**", "Price HH | RSI LH"
     except Exception as e:
-        print(f"Divergence detection error on {symbol} {tf_name}: {e}")
-    
+        print(f"Detection error {symbol} {tf_name}: {e}")
     return None, None
 
 async def main():
@@ -88,8 +77,8 @@ async def main():
         'options': {'defaultType': 'spot'}
     })
     
-    print("🤖 RSI Divergence Bot Started - Monitoring XAUUSDT & EURUSDT on Bybit")
-    
+    print("🤖 RSI Divergence Bot Started (Bybit)")
+
     last_alert_time = {}
     
     while True:
@@ -97,13 +86,11 @@ async def main():
             for tf in TIMEFRAMES:
                 key = f"{symbol}_{tf}"
                 df = fetch_ohlcv(exchange, symbol, tf)
-                
                 if df is not None:
                     signal, details = detect_rsi_divergence(df, symbol, tf)
-                    
                     if signal:
                         now = time.time()
-                        if key not in last_alert_time or now - last_alert_time[key] > 3600:  # 1 hour cooldown
+                        if key not in last_alert_time or now - last_alert_time[key] > 3600:
                             message = f"""
 <b>🚨 RSI Divergence Alert</b>
 
@@ -117,16 +104,13 @@ async def main():
                             await send_alert(message.strip())
                             last_alert_time[key] = now
                             await asyncio.sleep(3)
-        
-        await asyncio.sleep(60)  # Check every 60 seconds
+        await asyncio.sleep(60)
 
 def run_web_server():
     uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
 
 if __name__ == "__main__":
-    # Start health check server
     server_thread = threading.Thread(target=run_web_server, daemon=True)
     server_thread.start()
-    print("🌐 Health check server running on port 8000")
-    
+    print("🌐 Health check running")
     asyncio.run(main())
