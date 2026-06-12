@@ -5,7 +5,8 @@ from scipy.signal import argrelextrema
 import numpy as np
 import time
 import asyncio
-from telegram import Bot
+from telegram import Bot, Update
+from telegram.ext import Application, CommandHandler, ContextTypes
 import datetime
 from fastapi import FastAPI
 import uvicorn
@@ -15,7 +16,7 @@ import threading
 TELEGRAM_TOKEN = "8864441483:AAGa3UpekRTIIBF6djF9wjRkNEhc8SmRK14"
 TELEGRAM_CHAT_ID = 1405093484
 
-SYMBOLS = ['XAUUSDT']
+SYMBOLS = ['XAUT-USDT']
 TIMEFRAMES = ['15m', '30m', '1h', '4h']
 
 RSI_PERIOD = 14
@@ -28,7 +29,7 @@ app = FastAPI()
 
 @app.get("/health")
 async def health():
-    return {"status": "alive", "time": datetime.datetime.now().isoformat(), "exchange": "Bybit Futures"}
+    return {"status": "alive", "time": datetime.datetime.now().isoformat(), "exchange": "OKX"}
 
 async def send_alert(message):
     try:
@@ -37,26 +38,39 @@ async def send_alert(message):
     except Exception as e:
         print(f"Telegram error: {e}")
 
+# Manual Test Command
+async def test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    message = """
+<b>🧪 Manual Test Alert</b>
+
+✅ Bot is working correctly!
+📊 XAUT-USDT | Test
+
+🕒 {time}
+    """.format(time=datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC'))
+    await update.message.reply_text(message, parse_mode='HTML')
+
 def fetch_ohlcv(exchange, symbol, timeframe, limit=250):
     try:
-        # Force futures mode
-        ohlcv = exchange.fetch_ohlcv(symbol, timeframe, limit=limit, params={'category': 'linear'})
+        ohlcv = exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
         df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
         print(f"✅ Fetched {symbol} {timeframe} - {len(df)} candles")
         return df
     except Exception as e:
-        print(f"❌ Error fetching {symbol} {timeframe}: {str(e)[:180]}")
+        print(f"❌ Error fetching {symbol} {timeframe}: {str(e)[:150]}")
         return None
 
 def detect_rsi_divergence(df, symbol, tf_name):
     if df is None or len(df) < LOOKBACK:
-        return None, None
+        return None, None, None
     try:
         close = df['close']
         rsi = ta.rsi(close, length=RSI_PERIOD)
         price = close.iloc[-LOOKBACK:].values
         rsi_vals = rsi.iloc[-LOOKBACK:].values
+        current_price = close.iloc[-1]
+        current_rsi = rsi.iloc[-1]
 
         max_idx = argrelextrema(price, np.greater, order=EXTREMA_ORDER)[0]
         min_idx = argrelextrema(price, np.less, order=EXTREMA_ORDER)[0]
@@ -64,25 +78,22 @@ def detect_rsi_divergence(df, symbol, tf_name):
         if len(min_idx) >= 2:
             p1, p2 = min_idx[-2:]
             if price[p2] < price[p1] and rsi_vals[p2] > rsi_vals[p1]:
-                return "🟢 **Bullish RSI Divergence**", "Price LL | RSI HL"
+                return "🟢 **Bullish RSI Divergence**", "Price LL | RSI HL", f"Price: {current_price:.2f} | RSI: {current_rsi:.1f}"
         if len(max_idx) >= 2:
             p1, p2 = max_idx[-2:]
             if price[p2] > price[p1] and rsi_vals[p2] < rsi_vals[p1]:
-                return "🔴 **Bearish RSI Divergence**", "Price HH | RSI LH"
+                return "🔴 **Bearish RSI Divergence**", "Price HH | RSI LH", f"Price: {current_price:.2f} | RSI: {current_rsi:.1f}"
     except Exception as e:
         print(f"Detection error: {e}")
-    return None, None
+    return None, None, None
 
 async def main():
-    exchange = ccxt.bybit({
+    exchange = ccxt.okx({
         'enableRateLimit': True,
-        'options': {
-            'defaultType': 'future',   # Force futures
-            'defaultSubType': 'linear'
-        }
+        'options': {'defaultType': 'spot'}
     })
     
-    print("🤖 RSI Divergence Bot Started (Bybit Futures - XAUUSDT)")
+    print("🤖 RSI Divergence Bot Started (OKX - XAUT-USDT)")
 
     last_alert_time = {}
     
@@ -92,7 +103,7 @@ async def main():
                 key = f"{symbol}_{tf}"
                 df = fetch_ohlcv(exchange, symbol, tf)
                 if df is not None:
-                    signal, details = detect_rsi_divergence(df, symbol, tf)
+                    signal, details, extra = detect_rsi_divergence(df, symbol, tf)
                     if signal:
                         now = time.time()
                         if key not in last_alert_time or now - last_alert_time[key] > 3600:
@@ -103,6 +114,7 @@ async def main():
 {signal}
 
 {details}
+{extra}
 
 🕒 {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}
                             """
@@ -118,7 +130,12 @@ def run_web_server():
     uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
 
 if __name__ == "__main__":
+    # Telegram Application for commands
+    application = Application.builder().token(TELEGRAM_TOKEN).build()
+    application.add_handler(CommandHandler("test", test_command))
+    
     server_thread = threading.Thread(target=run_web_server, daemon=True)
     server_thread.start()
     print("🌐 Health check running")
+    
     asyncio.run(main())
