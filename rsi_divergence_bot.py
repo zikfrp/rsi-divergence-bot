@@ -15,7 +15,7 @@ import threading
 TELEGRAM_TOKEN = "8864441483:AAGa3UpekRTIIBF6djF9wjRkNEhc8SmRK14"
 TELEGRAM_CHAT_ID = 1405093484
 
-SYMBOLS = ['XAUT-USDT']                  # OKX correct symbol for Gold
+SYMBOLS = ['XAUUSDT']
 TIMEFRAMES = ['15m', '30m', '1h', '4h']
 
 RSI_PERIOD = 14
@@ -28,7 +28,7 @@ app = FastAPI()
 
 @app.get("/health")
 async def health():
-    return {"status": "alive", "time": datetime.datetime.now().isoformat(), "exchange": "OKX", "symbol": "XAUT-USDT"}
+    return {"status": "alive", "time": datetime.datetime.now().isoformat(), "exchange": "Bybit Futures"}
 
 async def send_alert(message):
     try:
@@ -39,13 +39,14 @@ async def send_alert(message):
 
 def fetch_ohlcv(exchange, symbol, timeframe, limit=250):
     try:
-        ohlcv = exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
+        # Force futures mode
+        ohlcv = exchange.fetch_ohlcv(symbol, timeframe, limit=limit, params={'category': 'linear'})
         df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
         print(f"✅ Fetched {symbol} {timeframe} - {len(df)} candles")
         return df
     except Exception as e:
-        print(f"❌ Error fetching {symbol} {timeframe}: {str(e)[:150]}")
+        print(f"❌ Error fetching {symbol} {timeframe}: {str(e)[:180]}")
         return None
 
 def detect_rsi_divergence(df, symbol, tf_name):
@@ -73,12 +74,15 @@ def detect_rsi_divergence(df, symbol, tf_name):
     return None, None
 
 async def main():
-    exchange = ccxt.okx({
+    exchange = ccxt.bybit({
         'enableRateLimit': True,
-        'options': {'defaultType': 'spot'}
+        'options': {
+            'defaultType': 'future',   # Force futures
+            'defaultSubType': 'linear'
+        }
     })
     
-    print("🤖 RSI Divergence Bot Started (OKX - XAUT-USDT)")
+    print("🤖 RSI Divergence Bot Started (Bybit Futures - XAUUSDT)")
 
     last_alert_time = {}
     
