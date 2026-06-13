@@ -32,19 +32,18 @@ async def health():
     return {"status": "alive", "time": datetime.datetime.now().isoformat(), "exchange": "Bybit Futures"}
 
 async def test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🧪 Test alert - Bot is running!", parse_mode='HTML')
+    await update.message.reply_text("🧪 Test alert - Bot is running on Bybit Futures!", parse_mode='HTML')
 
 def fetch_ohlcv(exchange, symbol, timeframe, limit=200):
     try:
-        # Aggressive futures settings
-        params = {'category': 'linear', 'interval': timeframe}
+        params = {'category': 'linear'}
         ohlcv = exchange.fetch_ohlcv(symbol, timeframe, limit=limit, params=params)
         df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
         print(f"✅ Fetched {symbol} {timeframe} - {len(df)} candles")
         return df
     except Exception as e:
-        print(f"❌ Error fetching {symbol} {timeframe}: {str(e)[:180]}")
+        print(f"❌ Error fetching {symbol} {timeframe}: {str(e)[:200]}")
         return None
 
 def detect_rsi_divergence(df, symbol, tf_name):
