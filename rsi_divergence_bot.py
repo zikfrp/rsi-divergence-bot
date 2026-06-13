@@ -29,7 +29,7 @@ app = FastAPI()
 
 @app.get("/health")
 async def health():
-    return {"status": "alive", "time": datetime.datetime.now().isoformat(), "exchange": "MEXC USDT Futures"}
+    return {"status": "alive", "time": datetime.datetime.now().isoformat(), "exchange": "MEXC Futures"}
 
 async def test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🧪 Test alert - Bot is running on MEXC Futures!", parse_mode='HTML')
@@ -39,20 +39,22 @@ def load_usdt_futures_pairs(exchange):
         markets = exchange.fetch_markets()
         futures_pairs = []
         for market in markets:
-            if (market.get('quote') == 'USDT' and 
-                market.get('future') and 
-                market.get('active') and 
-                'USDT' in market.get('symbol', '')):
-                futures_pairs.append(market['symbol'])
+            symbol = market.get('symbol', '')
+            if ('USDT' in symbol and 
+                market.get('future', False) and 
+                market.get('active', False)):
+                futures_pairs.append(symbol)
         
         print(f"✅ Loaded {len(futures_pairs)} USDT Futures pairs")
-        if len(futures_pairs) == 0:
-            print("⚠️ Falling back to popular pairs")
-            return ['XAUUSDT', 'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT']
-        return futures_pairs
+        if len(futures_pairs) < 10:
+            print("⚠️ Using popular fallback pairs")
+            return ['XAUUSDT', 'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT']
+        return futures_pairs[:150]   # Limit to 150 for stability
     except Exception as e:
         print(f"Error loading markets: {e}")
         return ['XAUUSDT', 'BTCUSDT', 'ETHUSDT', 'SOLUSDT']
+
+# ... (the rest of the functions remain the same as previous version)
 
 def fetch_ohlcv(exchange, symbol, timeframe, limit=200):
     try:
