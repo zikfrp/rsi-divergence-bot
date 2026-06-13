@@ -16,7 +16,7 @@ import threading
 TELEGRAM_TOKEN = "8864441483:AAGa3UpekRTIIBF6djF9wjRkNEhc8SmRK14"
 TELEGRAM_CHAT_ID = 1405093484
 
-SYMBOLS = ['XAUUSDT']                    # Only XAUUSDT
+SYMBOLS = ['XAUUSDT']
 TIMEFRAMES = ['15m', '30m', '1h', '4h']
 
 RSI_PERIOD = 14
@@ -32,17 +32,13 @@ async def health():
     return {"status": "alive", "time": datetime.datetime.now().isoformat(), "exchange": "Bybit Futures"}
 
 async def test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🧪 Test alert - Bot is running on Bybit Futures!", parse_mode='HTML')
+    await update.message.reply_text("🧪 Test alert - Bot is running!", parse_mode='HTML')
 
 def fetch_ohlcv(exchange, symbol, timeframe, limit=200):
     try:
-        # Strong futures configuration
-        ohlcv = exchange.fetch_ohlcv(
-            symbol, 
-            timeframe, 
-            limit=limit,
-            params={'category': 'linear'}
-        )
+        # Aggressive futures settings
+        params = {'category': 'linear', 'interval': timeframe}
+        ohlcv = exchange.fetch_ohlcv(symbol, timeframe, limit=limit, params=params)
         df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
         print(f"✅ Fetched {symbol} {timeframe} - {len(df)} candles")
@@ -119,14 +115,14 @@ async def main():
         print("✅ Cycle completed")
         await asyncio.sleep(60)
 
-def run_web_server():
-    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
-
 async def send_alert(message):
     try:
         await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message, parse_mode='HTML')
     except Exception as e:
         print(f"Telegram error: {e}")
+
+def run_web_server():
+    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
 
 if __name__ == "__main__":
     application = Application.builder().token(TELEGRAM_TOKEN).build()
