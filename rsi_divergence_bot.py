@@ -16,7 +16,7 @@ import threading
 TELEGRAM_TOKEN = "8864441483:AAGa3UpekRTIIBF6djF9wjRkNEhc8SmRK14"
 TELEGRAM_CHAT_ID = 1405093484
 
-SYMBOLS = ['XAUUSDT']
+SYMBOLS = ['XAUUSDT']                    # Only XAUUSDT
 TIMEFRAMES = ['15m', '30m', '1h', '4h']
 
 RSI_PERIOD = 14
@@ -32,19 +32,23 @@ async def health():
     return {"status": "alive", "time": datetime.datetime.now().isoformat(), "exchange": "Bybit Futures"}
 
 async def test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🧪 Test alert sent! Bot is running.", parse_mode='HTML')
+    await update.message.reply_text("🧪 Test alert - Bot is running on Bybit Futures!", parse_mode='HTML')
 
 def fetch_ohlcv(exchange, symbol, timeframe, limit=200):
     try:
         # Strong futures configuration
-        params = {'category': 'linear'}
-        ohlcv = exchange.fetch_ohlcv(symbol, timeframe, limit=limit, params=params)
+        ohlcv = exchange.fetch_ohlcv(
+            symbol, 
+            timeframe, 
+            limit=limit,
+            params={'category': 'linear'}
+        )
         df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
         print(f"✅ Fetched {symbol} {timeframe} - {len(df)} candles")
         return df
     except Exception as e:
-        print(f"❌ Error fetching {symbol} {timeframe}: {str(e)[:200]}")
+        print(f"❌ Error fetching {symbol} {timeframe}: {str(e)[:180]}")
         return None
 
 def detect_rsi_divergence(df, symbol, tf_name):
@@ -82,7 +86,7 @@ async def main():
         }
     })
     
-    print("🤖 RSI Divergence Bot Started (Bybit Futures - XAUUSDT)")
+    print("🤖 RSI Divergence Bot Started (Bybit Futures - XAUUSDT ONLY)")
 
     last_alert_time = {}
     
@@ -117,6 +121,12 @@ async def main():
 
 def run_web_server():
     uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
+
+async def send_alert(message):
+    try:
+        await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message, parse_mode='HTML')
+    except Exception as e:
+        print(f"Telegram error: {e}")
 
 if __name__ == "__main__":
     application = Application.builder().token(TELEGRAM_TOKEN).build()
