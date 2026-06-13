@@ -29,32 +29,28 @@ app = FastAPI()
 
 @app.get("/health")
 async def health():
-    return {"status": "alive", "time": datetime.datetime.now().isoformat(), "exchange": "MEXC Futures"}
+    return {"status": "alive", "time": datetime.datetime.now().isoformat(), "exchange": "MEXC All USDT"}
 
 async def test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🧪 Test alert - Bot is running on MEXC Futures!", parse_mode='HTML')
+    await update.message.reply_text("🧪 Test alert - Bot is running!", parse_mode='HTML')
 
-def load_usdt_futures_pairs(exchange):
+def load_usdt_pairs(exchange):
     try:
         markets = exchange.fetch_markets()
-        futures_pairs = []
-        for market in markets:
-            symbol = market.get('symbol', '')
-            if ('USDT' in symbol and 
-                market.get('future', False) and 
-                market.get('active', False)):
-                futures_pairs.append(symbol)
-        
-        print(f"✅ Loaded {len(futures_pairs)} USDT Futures pairs")
-        if len(futures_pairs) < 10:
-            print("⚠️ Using popular fallback pairs")
-            return ['XAUUSDT', 'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT']
-        return futures_pairs[:150]   # Limit to 150 for stability
+        usdt_pairs = [market['symbol'] for market in markets 
+                     if market.get('quote') == 'USDT' and market.get('active')]
+        print(f"✅ Loaded {len(usdt_pairs)} USDT pairs")
+        return usdt_pairs
     except Exception as e:
         print(f"Error loading markets: {e}")
-        return ['XAUUSDT', 'BTCUSDT', 'ETHUSDT', 'SOLUSDT']
-
-# ... (the rest of the functions remain the same as previous version)
+        # Fallback to popular pairs
+        return [
+            'XAUUSDT', 'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT',
+            'DOGEUSDT', 'ADAUSDT', 'AVAXUSDT', 'TRXUSDT', 'LINKUSDT', 'TONUSDT',
+            'SUIUSDT', 'NEARUSDT', 'APTUSDT', 'HBARUSDT', 'PEPEUSDT', 'WIFUSDT',
+            'FLOKIUSDT', 'BONKUSDT', 'SHIBUSDT', 'OPUSDT', 'ARBUSDT', 'MKRUSDT',
+            'AAVEUSDT', 'UNIUSDT', 'INJUSDT', 'FILUSDT', 'DOTUSDT', 'LTCUSDT'
+        ]
 
 def fetch_ohlcv(exchange, symbol, timeframe, limit=200):
     try:
@@ -79,11 +75,13 @@ def detect_rsi_divergence(df, symbol, tf_name):
         max_idx = argrelextrema(price, np.greater, order=EXTREMA_ORDER)[0]
         min_idx = argrelextrema(price, np.less, order=EXTREMA_ORDER)[0]
 
+        # Bullish only when RSI <= 30
         if len(min_idx) >= 2:
             p1, p2 = min_idx[-2:]
             if price[p2] < price[p1] and rsi_vals[p2] > rsi_vals[p1] and current_rsi <= 30:
                 return "🟢 **Bullish RSI Divergence**", "Price LL | RSI HL", f"Price: {current_price:.4f} | RSI: {current_rsi:.1f} (Oversold)"
 
+        # Bearish only when RSI >= 70
         if len(max_idx) >= 2:
             p1, p2 = max_idx[-2:]
             if price[p2] > price[p1] and rsi_vals[p2] < rsi_vals[p1] and current_rsi >= 70:
@@ -95,17 +93,17 @@ def detect_rsi_divergence(df, symbol, tf_name):
 async def main():
     exchange = ccxt.mexc({
         'enableRateLimit': True,
-        'options': {'defaultType': 'future'}
+        'options': {'defaultType': 'spot'}
     })
     
-    futures_pairs = load_usdt_futures_pairs(exchange)
-    print(f"🤖 RSI Divergence Bot Started (MEXC USDT Futures - {len(futures_pairs)} pairs, 1D, scan every {SCAN_INTERVAL_HOURS} hours)")
+    usdt_pairs = load_usdt_pairs(exchange)
+    print(f"🤖 RSI Divergence Bot Started (MEXC - {len(usdt_pairs)} USDT Pairs, 1D, scan every {SCAN_INTERVAL_HOURS} hours)")
 
     last_alert_time = {}
     
     while True:
         print(f"🔄 Starting full scan at {datetime.datetime.now()}")
-        for symbol in futures_pairs:
+        for symbol in usdt_pairs:
             for tf in TIMEFRAMES:
                 key = f"{symbol}_{tf}"
                 df = fetch_ohlcv(exchange, symbol, tf)
