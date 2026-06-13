@@ -16,7 +16,7 @@ import threading
 TELEGRAM_TOKEN = "8864441483:AAGa3UpekRTIIBF6djF9wjRkNEhc8SmRK14"
 TELEGRAM_CHAT_ID = 1405093484
 
-SYMBOLS = ['XAUT-USDT']
+SYMBOLS = ['XAUUSDT']
 TIMEFRAMES = ['15m', '30m', '1h', '4h']
 
 RSI_PERIOD = 14
@@ -29,7 +29,7 @@ app = FastAPI()
 
 @app.get("/health")
 async def health():
-    return {"status": "alive", "time": datetime.datetime.now().isoformat(), "exchange": "OKX"}
+    return {"status": "alive", "time": datetime.datetime.now().isoformat(), "exchange": "Bybit Futures"}
 
 async def send_alert(message):
     try:
@@ -38,27 +38,27 @@ async def send_alert(message):
     except Exception as e:
         print(f"Telegram error: {e}")
 
-# Manual Test Command
 async def test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    message = """
+    message = f"""
 <b>🧪 Manual Test Alert</b>
 
-✅ Bot is working correctly!
-📊 XAUT-USDT | Test
+✅ Bot is working correctly on Bybit Futures!
+📊 XAUUSDT | Test
 
-🕒 {time}
-    """.format(time=datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC'))
+🕒 {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}
+    """
     await update.message.reply_text(message, parse_mode='HTML')
 
 def fetch_ohlcv(exchange, symbol, timeframe, limit=250):
     try:
-        ohlcv = exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
+        # Force linear futures
+        ohlcv = exchange.fetch_ohlcv(symbol, timeframe, limit=limit, params={'category': 'linear'})
         df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
         print(f"✅ Fetched {symbol} {timeframe} - {len(df)} candles")
         return df
     except Exception as e:
-        print(f"❌ Error fetching {symbol} {timeframe}: {str(e)[:150]}")
+        print(f"❌ Error fetching {symbol} {timeframe}: {str(e)[:180]}")
         return None
 
 def detect_rsi_divergence(df, symbol, tf_name):
@@ -88,12 +88,15 @@ def detect_rsi_divergence(df, symbol, tf_name):
     return None, None, None
 
 async def main():
-    exchange = ccxt.okx({
+    exchange = ccxt.bybit({
         'enableRateLimit': True,
-        'options': {'defaultType': 'spot'}
+        'options': {
+            'defaultType': 'future',
+            'defaultSubType': 'linear'
+        }
     })
     
-    print("🤖 RSI Divergence Bot Started (OKX - XAUT-USDT)")
+    print("🤖 RSI Divergence Bot Started (Bybit Futures - XAUUSDT)")
 
     last_alert_time = {}
     
@@ -130,12 +133,10 @@ def run_web_server():
     uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
 
 if __name__ == "__main__":
-    # Telegram Application for commands
     application = Application.builder().token(TELEGRAM_TOKEN).build()
     application.add_handler(CommandHandler("test", test_command))
     
     server_thread = threading.Thread(target=run_web_server, daemon=True)
     server_thread.start()
     print("🌐 Health check running")
-    
     asyncio.run(main())
