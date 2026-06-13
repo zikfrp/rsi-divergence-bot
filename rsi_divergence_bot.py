@@ -37,15 +37,22 @@ async def test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def load_usdt_futures_pairs(exchange):
     try:
         markets = exchange.fetch_markets()
-        futures_pairs = [market['symbol'] for market in markets 
-                        if market.get('quote') == 'USDT' 
-                        and market.get('future') 
-                        and market.get('active')]
+        futures_pairs = []
+        for market in markets:
+            if (market.get('quote') == 'USDT' and 
+                market.get('future') and 
+                market.get('active') and 
+                'USDT' in market.get('symbol', '')):
+                futures_pairs.append(market['symbol'])
+        
         print(f"✅ Loaded {len(futures_pairs)} USDT Futures pairs")
+        if len(futures_pairs) == 0:
+            print("⚠️ Falling back to popular pairs")
+            return ['XAUUSDT', 'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT']
         return futures_pairs
     except Exception as e:
-        print(f"Error loading futures markets: {e}")
-        return ['XAUUSDT', 'BTCUSDT', 'ETHUSDT']
+        print(f"Error loading markets: {e}")
+        return ['XAUUSDT', 'BTCUSDT', 'ETHUSDT', 'SOLUSDT']
 
 def fetch_ohlcv(exchange, symbol, timeframe, limit=200):
     try:
@@ -70,13 +77,11 @@ def detect_rsi_divergence(df, symbol, tf_name):
         max_idx = argrelextrema(price, np.greater, order=EXTREMA_ORDER)[0]
         min_idx = argrelextrema(price, np.less, order=EXTREMA_ORDER)[0]
 
-        # Bullish only when RSI <= 30
         if len(min_idx) >= 2:
             p1, p2 = min_idx[-2:]
             if price[p2] < price[p1] and rsi_vals[p2] > rsi_vals[p1] and current_rsi <= 30:
                 return "🟢 **Bullish RSI Divergence**", "Price LL | RSI HL", f"Price: {current_price:.4f} | RSI: {current_rsi:.1f} (Oversold)"
 
-        # Bearish only when RSI >= 70
         if len(max_idx) >= 2:
             p1, p2 = max_idx[-2:]
             if price[p2] > price[p1] and rsi_vals[p2] < rsi_vals[p1] and current_rsi >= 70:
