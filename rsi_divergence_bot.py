@@ -31,34 +31,20 @@ app = FastAPI()
 async def health():
     return {"status": "alive", "time": datetime.datetime.now().isoformat(), "exchange": "Bybit Futures"}
 
-async def send_alert(message):
-    try:
-        await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message, parse_mode='HTML')
-        print(f"✅ Alert sent")
-    except Exception as e:
-        print(f"Telegram error: {e}")
-
 async def test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    message = f"""
-<b>🧪 Manual Test Alert</b>
+    await update.message.reply_text("🧪 Test alert sent! Bot is running.", parse_mode='HTML')
 
-✅ Bot is working correctly on Bybit Futures!
-📊 XAUUSDT | Test
-
-🕒 {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}
-    """
-    await update.message.reply_text(message, parse_mode='HTML')
-
-def fetch_ohlcv(exchange, symbol, timeframe, limit=250):
+def fetch_ohlcv(exchange, symbol, timeframe, limit=200):
     try:
-        # Force linear futures
-        ohlcv = exchange.fetch_ohlcv(symbol, timeframe, limit=limit, params={'category': 'linear'})
+        # Strong futures configuration
+        params = {'category': 'linear'}
+        ohlcv = exchange.fetch_ohlcv(symbol, timeframe, limit=limit, params=params)
         df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
         print(f"✅ Fetched {symbol} {timeframe} - {len(df)} candles")
         return df
     except Exception as e:
-        print(f"❌ Error fetching {symbol} {timeframe}: {str(e)[:180]}")
+        print(f"❌ Error fetching {symbol} {timeframe}: {str(e)[:200]}")
         return None
 
 def detect_rsi_divergence(df, symbol, tf_name):
@@ -69,8 +55,8 @@ def detect_rsi_divergence(df, symbol, tf_name):
         rsi = ta.rsi(close, length=RSI_PERIOD)
         price = close.iloc[-LOOKBACK:].values
         rsi_vals = rsi.iloc[-LOOKBACK:].values
-        current_price = close.iloc[-1]
-        current_rsi = rsi.iloc[-1]
+        current_price = float(close.iloc[-1])
+        current_rsi = float(rsi.iloc[-1])
 
         max_idx = argrelextrema(price, np.greater, order=EXTREMA_ORDER)[0]
         min_idx = argrelextrema(price, np.less, order=EXTREMA_ORDER)[0]
