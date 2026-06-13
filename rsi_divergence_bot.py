@@ -16,9 +16,8 @@ import threading
 TELEGRAM_TOKEN = "8864441483:AAGa3UpekRTIIBF6djF9wjRkNEhc8SmRK14"
 TELEGRAM_CHAT_ID = 1405093484
 
-# Major USDT Pairs
-SYMBOLS = ['XAUUSDT', 'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT']
 TIMEFRAMES = ['15m', '30m', '1h', '4h']
+SCAN_INTERVAL_HOURS = 4
 
 RSI_PERIOD = 14
 LOOKBACK = 60
@@ -30,20 +29,29 @@ app = FastAPI()
 
 @app.get("/health")
 async def health():
-    return {"status": "alive", "time": datetime.datetime.now().isoformat(), "exchange": "OKX", "pairs": len(SYMBOLS)}
+    return {"status": "alive", "time": datetime.datetime.now().isoformat(), "exchange": "OKX All USDT"}
 
 async def test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🧪 Test alert - Bot is running on OKX!", parse_mode='HTML')
+    await update.message.reply_text("🧪 Test alert - Bot is running!", parse_mode='HTML')
 
-def fetch_ohlcv(exchange, symbol, timeframe, limit=250):
+def load_usdt_pairs(exchange):
+    try:
+        markets = exchange.fetch_markets()
+        usdt_pairs = [market['symbol'] for market in markets 
+                     if market.get('quote') == 'USDT' and market.get('spot') and market.get('active')]
+        print(f"Loaded {len(usdt_pairs)} USDT pairs")
+        return usdt_pairs[:80]   # Limit to 80 for performance and rate limits
+    except Exception as e:
+        print(f"Error loading markets: {e}")
+        return ['XAU-USDT', 'BTC-USDT', 'ETH-USDT']
+
+def fetch_ohlcv(exchange, symbol, timeframe, limit=200):
     try:
         ohlcv = exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
         df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-        print(f"✅ Fetched {symbol} {timeframe}")
         return df
-    except Exception as e:
-        print(f"❌ Error fetching {symbol} {timeframe}: {str(e)[:120]}")
+    except Exception:
         return None
 
 def detect_rsi_divergence(df, symbol, tf_name):
@@ -63,13 +71,13 @@ def detect_rsi_divergence(df, symbol, tf_name):
         if len(min_idx) >= 2:
             p1, p2 = min_idx[-2:]
             if price[p2] < price[p1] and rsi_vals[p2] > rsi_vals[p1]:
-                return "🟢 **Bullish RSI Divergence**", "Price LL | RSI HL", f"Price: {current_price:.2f} | RSI: {current_rsi:.1f}"
+                return "🟢 **Bullish RSI Divergence**", "Price LL | RSI HL", f"Price: {current_price:.4f} | RSI: {current_rsi:.1f}"
         if len(max_idx) >= 2:
             p1, p2 = max_idx[-2:]
             if price[p2] > price[p1] and rsi_vals[p2] < rsi_vals[p1]:
-                return "🔴 **Bearish RSI Divergence**", "Price HH | RSI LH", f"Price: {current_price:.2f} | RSI: {current_rsi:.1f}"
-    except Exception as e:
-        print(f"Detection error on {symbol}: {e}")
+                return "🔴 **Bearish RSI Divergence**", "Price HH | RSI LH", f"Price: {current_price:.4f} | RSI: {current_rsi:.1f}"
+    except Exception:
+        pass
     return None, None, None
 
 async def main():
@@ -78,12 +86,14 @@ async def main():
         'options': {'defaultType': 'spot'}
     })
     
-    print("🤖 RSI Divergence Bot Started (OKX - Multiple USDT Pairs)")
+    usdt_pairs = load_usdt_pairs(exchange)
+    print(f"🤖 RSI Divergence Bot Started (OKX - {len(usdt_pairs)} USDT Pairs, scan every {SCAN_INTERVAL_HOURS} hours)")
 
     last_alert_time = {}
     
     while True:
-        for symbol in SYMBOLS:
+        print(f"🔄 Starting scan at {datetime.datetime.now()}")
+        for symbol in usdt_pairs:
             for tf in TIMEFRAMES:
                 key = f"{symbol}_{tf}"
                 df = fetch_ohlcv(exchange, symbol, tf)
@@ -91,7 +101,7 @@ async def main():
                     signal, details, extra = detect_rsi_divergence(df, symbol, tf)
                     if signal:
                         now = time.time()
-                        if key not in last_alert_time or now - last_alert_time[key] > 3600:
+                        if key not in last_alert_time or now - last_alert_time[key] > (SCAN_INTERVAL_HOURS * 3600):
                             message = f"""
 <b>🚨 RSI Divergence Alert</b>
 
@@ -105,11 +115,11 @@ async def main():
                             """
                             await send_alert(message.strip())
                             last_alert_time[key] = now
-                            await asyncio.sleep(3)
-                await asyncio.sleep(1)
+                            await asyncio.sleep(2)
+                await asyncio.sleep(0.3)
         
-        print("✅ Full cycle completed")
-        await asyncio.sleep(60)
+        print(f"✅ Full scan completed. Next scan in {SCAN_INTERVAL_HOURS} hours.")
+        await asyncio.sleep(SCAN_INTERVAL_HOURS * 3600)
 
 async def send_alert(message):
     try:
