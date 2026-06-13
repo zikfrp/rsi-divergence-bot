@@ -29,20 +29,22 @@ app = FastAPI()
 
 @app.get("/health")
 async def health():
-    return {"status": "alive", "time": datetime.datetime.now().isoformat(), "exchange": "MEXC All USDT"}
+    return {"status": "alive", "time": datetime.datetime.now().isoformat(), "exchange": "MEXC USDT Futures"}
 
 async def test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🧪 Test alert - Bot is running!", parse_mode='HTML')
+    await update.message.reply_text("🧪 Test alert - Bot is running on MEXC Futures!", parse_mode='HTML')
 
-def load_usdt_pairs(exchange):
+def load_usdt_futures_pairs(exchange):
     try:
         markets = exchange.fetch_markets()
-        usdt_pairs = [market['symbol'] for market in markets 
-                     if market.get('quote') == 'USDT' and market.get('spot') and market.get('active')]
-        print(f"✅ Loaded {len(usdt_pairs)} USDT pairs")
-        return usdt_pairs
+        futures_pairs = [market['symbol'] for market in markets 
+                        if market.get('quote') == 'USDT' 
+                        and market.get('future') 
+                        and market.get('active')]
+        print(f"✅ Loaded {len(futures_pairs)} USDT Futures pairs")
+        return futures_pairs
     except Exception as e:
-        print(f"Error loading markets: {e}")
+        print(f"Error loading futures markets: {e}")
         return ['XAUUSDT', 'BTCUSDT', 'ETHUSDT']
 
 def fetch_ohlcv(exchange, symbol, timeframe, limit=200):
@@ -68,35 +70,35 @@ def detect_rsi_divergence(df, symbol, tf_name):
         max_idx = argrelextrema(price, np.greater, order=EXTREMA_ORDER)[0]
         min_idx = argrelextrema(price, np.less, order=EXTREMA_ORDER)[0]
 
-        # Bullish Divergence + RSI <= 30
+        # Bullish only when RSI <= 30
         if len(min_idx) >= 2:
             p1, p2 = min_idx[-2:]
             if price[p2] < price[p1] and rsi_vals[p2] > rsi_vals[p1] and current_rsi <= 30:
                 return "🟢 **Bullish RSI Divergence**", "Price LL | RSI HL", f"Price: {current_price:.4f} | RSI: {current_rsi:.1f} (Oversold)"
 
-        # Bearish Divergence + RSI >= 70
+        # Bearish only when RSI >= 70
         if len(max_idx) >= 2:
             p1, p2 = max_idx[-2:]
             if price[p2] > price[p1] and rsi_vals[p2] < rsi_vals[p1] and current_rsi >= 70:
                 return "🔴 **Bearish RSI Divergence**", "Price HH | RSI LH", f"Price: {current_price:.4f} | RSI: {current_rsi:.1f} (Overbought)"
-    except Exception as e:
+    except Exception:
         pass
     return None, None, None
 
 async def main():
     exchange = ccxt.mexc({
         'enableRateLimit': True,
-        'options': {'defaultType': 'spot'}
+        'options': {'defaultType': 'future'}
     })
     
-    usdt_pairs = load_usdt_pairs(exchange)
-    print(f"🤖 RSI Divergence Bot Started (MEXC - ALL {len(usdt_pairs)} USDT Pairs, 1D, scan every {SCAN_INTERVAL_HOURS} hours)")
+    futures_pairs = load_usdt_futures_pairs(exchange)
+    print(f"🤖 RSI Divergence Bot Started (MEXC USDT Futures - {len(futures_pairs)} pairs, 1D, scan every {SCAN_INTERVAL_HOURS} hours)")
 
     last_alert_time = {}
     
     while True:
         print(f"🔄 Starting full scan at {datetime.datetime.now()}")
-        for symbol in usdt_pairs:
+        for symbol in futures_pairs:
             for tf in TIMEFRAMES:
                 key = f"{symbol}_{tf}"
                 df = fetch_ohlcv(exchange, symbol, tf)
