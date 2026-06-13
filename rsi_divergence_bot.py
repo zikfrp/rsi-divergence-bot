@@ -16,7 +16,8 @@ import threading
 TELEGRAM_TOKEN = "8864441483:AAGa3UpekRTIIBF6djF9wjRkNEhc8SmRK14"
 TELEGRAM_CHAT_ID = 1405093484
 
-SYMBOLS = ['XAUUSDT']
+# Major USDT Pairs
+SYMBOLS = ['XAUUSDT', 'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT']
 TIMEFRAMES = ['15m', '30m', '1h', '4h']
 
 RSI_PERIOD = 14
@@ -29,21 +30,20 @@ app = FastAPI()
 
 @app.get("/health")
 async def health():
-    return {"status": "alive", "time": datetime.datetime.now().isoformat(), "exchange": "Bybit Futures"}
+    return {"status": "alive", "time": datetime.datetime.now().isoformat(), "exchange": "OKX", "pairs": len(SYMBOLS)}
 
 async def test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🧪 Test alert - Bot is running on Bybit Futures!", parse_mode='HTML')
+    await update.message.reply_text("🧪 Test alert - Bot is running on OKX!", parse_mode='HTML')
 
-def fetch_ohlcv(exchange, symbol, timeframe, limit=200):
+def fetch_ohlcv(exchange, symbol, timeframe, limit=250):
     try:
-        params = {'category': 'linear'}
-        ohlcv = exchange.fetch_ohlcv(symbol, timeframe, limit=limit, params=params)
+        ohlcv = exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
         df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-        print(f"✅ Fetched {symbol} {timeframe} - {len(df)} candles")
+        print(f"✅ Fetched {symbol} {timeframe}")
         return df
     except Exception as e:
-        print(f"❌ Error fetching {symbol} {timeframe}: {str(e)[:200]}")
+        print(f"❌ Error fetching {symbol} {timeframe}: {str(e)[:120]}")
         return None
 
 def detect_rsi_divergence(df, symbol, tf_name):
@@ -69,19 +69,16 @@ def detect_rsi_divergence(df, symbol, tf_name):
             if price[p2] > price[p1] and rsi_vals[p2] < rsi_vals[p1]:
                 return "🔴 **Bearish RSI Divergence**", "Price HH | RSI LH", f"Price: {current_price:.2f} | RSI: {current_rsi:.1f}"
     except Exception as e:
-        print(f"Detection error: {e}")
+        print(f"Detection error on {symbol}: {e}")
     return None, None, None
 
 async def main():
-    exchange = ccxt.bybit({
+    exchange = ccxt.okx({
         'enableRateLimit': True,
-        'options': {
-            'defaultType': 'future',
-            'defaultSubType': 'linear'
-        }
+        'options': {'defaultType': 'spot'}
     })
     
-    print("🤖 RSI Divergence Bot Started (Bybit Futures - XAUUSDT ONLY)")
+    print("🤖 RSI Divergence Bot Started (OKX - Multiple USDT Pairs)")
 
     last_alert_time = {}
     
@@ -109,9 +106,9 @@ async def main():
                             await send_alert(message.strip())
                             last_alert_time[key] = now
                             await asyncio.sleep(3)
-                await asyncio.sleep(2)
+                await asyncio.sleep(1)
         
-        print("✅ Cycle completed")
+        print("✅ Full cycle completed")
         await asyncio.sleep(60)
 
 async def send_alert(message):
