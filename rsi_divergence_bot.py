@@ -17,7 +17,7 @@ TELEGRAM_TOKEN = "8864441483:AAGa3UpekRTIIBF6djF9wjRkNEhc8SmRK14"
 TELEGRAM_CHAT_ID = 1405093484
 
 TIMEFRAMES = ['1d']                    # Daily only
-SCAN_INTERVAL_HOURS = 4
+SCAN_INTERVAL_HOURS = 12               # Scan every 12 hours
 
 RSI_PERIOD = 14
 LOOKBACK = 60
@@ -29,21 +29,21 @@ app = FastAPI()
 
 @app.get("/health")
 async def health():
-    return {"status": "alive", "time": datetime.datetime.now().isoformat(), "exchange": "OKX All USDT"}
+    return {"status": "alive", "time": datetime.datetime.now().isoformat(), "exchange": "MEXC All USDT"}
 
 async def test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🧪 Test alert - Bot is running (All USDT pairs, 1D)!", parse_mode='HTML')
+    await update.message.reply_text("🧪 Test alert - Bot is running on MEXC (All USDT pairs, 1D)!", parse_mode='HTML')
 
 def load_usdt_pairs(exchange):
     try:
         markets = exchange.fetch_markets()
         usdt_pairs = [market['symbol'] for market in markets 
                      if market.get('quote') == 'USDT' and market.get('spot') and market.get('active')]
-        print(f"✅ Loaded {len(usdt_pairs)} USDT pairs (scanning all)")
+        print(f"✅ Loaded {len(usdt_pairs)} USDT pairs")
         return usdt_pairs
     except Exception as e:
         print(f"Error loading markets: {e}")
-        return ['XAU-USDT', 'BTC-USDT', 'ETH-USDT']
+        return ['XAUUSDT', 'BTCUSDT', 'ETHUSDT']
 
 def fetch_ohlcv(exchange, symbol, timeframe, limit=200):
     try:
@@ -81,13 +81,13 @@ def detect_rsi_divergence(df, symbol, tf_name):
     return None, None, None
 
 async def main():
-    exchange = ccxt.okx({
+    exchange = ccxt.mexc({
         'enableRateLimit': True,
         'options': {'defaultType': 'spot'}
     })
     
     usdt_pairs = load_usdt_pairs(exchange)
-    print(f"🤖 RSI Divergence Bot Started (OKX - ALL {len(usdt_pairs)} USDT Pairs, 1D, scan every {SCAN_INTERVAL_HOURS} hours)")
+    print(f"🤖 RSI Divergence Bot Started (MEXC - ALL {len(usdt_pairs)} USDT Pairs, 1D, scan every {SCAN_INTERVAL_HOURS} hours)")
 
     last_alert_time = {}
     
@@ -116,9 +116,9 @@ async def main():
                             await send_alert(message.strip())
                             last_alert_time[key] = now
                             await asyncio.sleep(2)
-                await asyncio.sleep(0.4)   # Rate limit friendly
+                await asyncio.sleep(0.4)
         
-        print(f"✅ Full scan of all pairs completed. Next scan in {SCAN_INTERVAL_HOURS} hours.")
+        print(f"✅ Full scan completed. Next scan in {SCAN_INTERVAL_HOURS} hours.")
         await asyncio.sleep(SCAN_INTERVAL_HOURS * 3600)
 
 async def send_alert(message):
