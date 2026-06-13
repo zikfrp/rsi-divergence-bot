@@ -16,8 +16,8 @@ import threading
 TELEGRAM_TOKEN = "8864441483:AAGa3UpekRTIIBF6djF9wjRkNEhc8SmRK14"
 TELEGRAM_CHAT_ID = 1405093484
 
-TIMEFRAMES = ['1d']                    # Daily only
-SCAN_INTERVAL_HOURS = 12               # Scan every 12 hours
+TIMEFRAMES = ['1d']
+SCAN_INTERVAL_HOURS = 12
 
 RSI_PERIOD = 14
 LOOKBACK = 60
@@ -32,7 +32,7 @@ async def health():
     return {"status": "alive", "time": datetime.datetime.now().isoformat(), "exchange": "MEXC All USDT"}
 
 async def test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🧪 Test alert - Bot is running on MEXC (All USDT pairs, 1D)!", parse_mode='HTML')
+    await update.message.reply_text("🧪 Test alert - Bot is running!", parse_mode='HTML')
 
 def load_usdt_pairs(exchange):
     try:
@@ -68,15 +68,18 @@ def detect_rsi_divergence(df, symbol, tf_name):
         max_idx = argrelextrema(price, np.greater, order=EXTREMA_ORDER)[0]
         min_idx = argrelextrema(price, np.less, order=EXTREMA_ORDER)[0]
 
+        # Bullish Divergence + RSI <= 30
         if len(min_idx) >= 2:
             p1, p2 = min_idx[-2:]
-            if price[p2] < price[p1] and rsi_vals[p2] > rsi_vals[p1]:
-                return "🟢 **Bullish RSI Divergence**", "Price LL | RSI HL", f"Price: {current_price:.4f} | RSI: {current_rsi:.1f}"
+            if price[p2] < price[p1] and rsi_vals[p2] > rsi_vals[p1] and current_rsi <= 30:
+                return "🟢 **Bullish RSI Divergence**", "Price LL | RSI HL", f"Price: {current_price:.4f} | RSI: {current_rsi:.1f} (Oversold)"
+
+        # Bearish Divergence + RSI >= 70
         if len(max_idx) >= 2:
             p1, p2 = max_idx[-2:]
-            if price[p2] > price[p1] and rsi_vals[p2] < rsi_vals[p1]:
-                return "🔴 **Bearish RSI Divergence**", "Price HH | RSI LH", f"Price: {current_price:.4f} | RSI: {current_rsi:.1f}"
-    except Exception:
+            if price[p2] > price[p1] and rsi_vals[p2] < rsi_vals[p1] and current_rsi >= 70:
+                return "🔴 **Bearish RSI Divergence**", "Price HH | RSI LH", f"Price: {current_price:.4f} | RSI: {current_rsi:.1f} (Overbought)"
+    except Exception as e:
         pass
     return None, None, None
 
