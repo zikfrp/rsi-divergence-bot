@@ -124,14 +124,13 @@ def calculate_quality_score(candles: List[Candle], sig: Signal, bos_idx: int) ->
 
 
 # ---------------------------------------------------------------------------
-# FULL PATTERN DETECTION
+# PATTERN DETECTION (Full)
 # ---------------------------------------------------------------------------
 
 def detect_bearish_setup(candles: List[Candle], cfg: dict) -> Optional[Signal]:
     prev_high, _, session_name = find_previous_session_extremes(candles)
     if prev_high == 0: return None
     n = len(candles)
-
     sweep_idx = None
     for j in range(n-80, n):
         if candles[j].high > prev_high and candles[j].close < prev_high:
@@ -190,7 +189,6 @@ def detect_bullish_setup(candles: List[Candle], cfg: dict) -> Optional[Signal]:
     _, prev_low, session_name = find_previous_session_extremes(candles)
     if prev_low == 0: return None
     n = len(candles)
-
     sweep_idx = None
     for j in range(n-80, n):
         if candles[j].low < prev_low and candles[j].close > prev_low:
@@ -246,38 +244,46 @@ def detect_bullish_setup(candles: List[Candle], cfg: dict) -> Optional[Signal]:
 
 
 # ---------------------------------------------------------------------------
-# EXCHANGE & MAIN
+# EXCHANGE - BOTH SPOT + FUTURES
 # ---------------------------------------------------------------------------
 
 def build_exchange() -> ccxt.Exchange:
-    ex = ccxt.mexc({"enableRateLimit": True, "options": {"defaultType": "future"}})
+    ex = ccxt.mexc({"enableRateLimit": True})
     ex.load_markets()
     return ex
 
 
 def get_usdt_pairs(ex: ccxt.Exchange, cfg: dict) -> List[str]:
+    """Scan BOTH spot and futures with volume threshold"""
     try:
         tickers = ex.fetch_tickers() or {}
         ranked = []
         for sym, t in tickers.items():
             m = ex.markets.get(sym)
-            if m and m.get("active") and m.get("quote") == "USDT" and m.get("type") == "swap":
-                vol = float(t.get("quoteVolume") or 0)
-                if vol >= cfg["min_volume_threshold"]:
-                    ranked.append((sym, vol))
+            if not m or not m.get("active") or m.get("quote") != "USDT":
+                continue
+            # Accept both spot and futures (swap)
+            if m.get("type") not in ("spot", "swap"):
+                continue
+            vol = float(t.get("quoteVolume") or 0)
+            if vol >= cfg["min_volume_threshold"]:
+                ranked.append((sym, vol))
+
         if ranked:
             ranked.sort(key=lambda x: x[1], reverse=True)
-            log.info("Loaded %d futures pairs above volume threshold", len(ranked))
-            return [s for s, _ in ranked[:300]]
+            symbols = [s for s, _ in ranked[:300]]
+            log.info("✅ Loaded %d pairs (spot + futures) above $2M volume", len(symbols))
+            return symbols
     except Exception as e:
-        log.error("Ticker fetch failed: %s. Using fallback.", e)
+        log.warning("Ticker fetch failed: %s. Using fallback.", e)
 
+    # Fallback list (mix of spot & futures)
     fallback = [
-        "BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT", "XRP/USDT:USDT",
-        "BNB/USDT:USDT", "DOGE/USDT:USDT", "TON/USDT:USDT", "ADA/USDT:USDT",
-        "AVAX/USDT:USDT", "TRX/USDT:USDT", "SHIB/USDT:USDT", "LINK/USDT:USDT"
+        "BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT",
+        "BNB/USDT", "DOGE/USDT", "TON/USDT", "ADA/USDT",
+        "BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT"
     ]
-    log.info("Using fallback list of %d major futures pairs", len(fallback))
+    log.info("Using fallback list of %d pairs", len(fallback))
     return fallback
 
 
@@ -292,6 +298,7 @@ def fetch_candles(ex: ccxt.Exchange, symbol: str, timeframe: str, limit: int) ->
         return None
 
 
+# Telegram, State, Scan, Main (unchanged)
 def send_telegram(cfg: dict, text: str) -> None:
     try:
         requests.post(f"https://api.telegram.org/bot{cfg['telegram_bot_token']}/sendMessage",
@@ -364,7 +371,7 @@ def main():
     cfg = CONFIG
     ex = build_exchange()
     symbols = get_usdt_pairs(ex, cfg)
-    log.info("Scanning %d futures pairs every 12h", len(symbols))
+    log.info("Scanning %d spot + futures pairs every 12h", len(symbols))
 
     state = load_state(cfg["state_file"])
     last_refresh = time.time()
@@ -375,7 +382,6 @@ def main():
             try:
                 ex.load_markets(reload=True)
                 symbols = get_usdt_pairs(ex, cfg)
-                log.info("Refreshed symbol list")
             except Exception as e:
                 log.error("Refresh failed: %s", e)
             last_refresh = time.time()
