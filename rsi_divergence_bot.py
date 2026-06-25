@@ -3,7 +3,7 @@ import time
 import json
 import logging
 from dataclasses import dataclass
-from typing import List, Optional, Dict
+from typing import List, Dict
 
 import requests
 import ccxt
@@ -13,45 +13,35 @@ import ccxt
 # ---------------------------------------------------------------------------
 
 CONFIG = {
-    # Telegram (your credentials)
     "telegram_bot_token": "8864441483:AAGa3UpekRTIIBF6djF9wjRkNEhc8SmRK14",
     "telegram_chat_id": "1405093484",
 
-    # Timeframes to scan
     "timeframes": ["15m", "1h", "4h"],
-
-    # How many candles of history to pull per scan
     "candle_limit": 300,
-
-    # Fractal swing detection
     "fractal_strength": 2,
 
-    # Pattern parameters
     "max_bars_between_sweep_and_bos": 30,
     "ob_lookback_max_bars": 10,
     "min_bos_displacement_atr_mult": 0.5,
 
-    # New features
     "min_quality_score": 55,
     "sl_atr_mult": 1.0,
     "atr_period": 14,
 
-    # State & filtering
     "state_file": "scanner_state.json",
     "quote_currency": "USDT",
     "symbol_excludes": ["UP/", "DOWN/", "BULL/", "BEAR/"],
-    
-    # CHANGED: Scan every 1 hour
-    "poll_interval_seconds": 3600,
-    
+
+    # Scan every 12 hours
+    "poll_interval_seconds": 12 * 3600,
     "symbol_refresh_interval_seconds": 6 * 3600,
-    "per_symbol_delay_seconds": 0.2,   # slightly higher for hourly runs
+    "per_symbol_delay_seconds": 0.25,
+
+    # NEW: Volume Threshold (USDT 24h quote volume)
+    "min_volume_threshold": 2_000_000,   # Change this as needed (e.g. 5000000 for $5M)
 }
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("scanner")
 
 
@@ -73,7 +63,7 @@ class Candle:
 class Swing:
     index: int
     price: float
-    kind: str  # "high" or "low"
+    kind: str
 
 
 @dataclass
@@ -94,20 +84,16 @@ class Signal:
 
 
 # ---------------------------------------------------------------------------
-# HELPERS
+# HELPERS (unchanged)
 # ---------------------------------------------------------------------------
 
 def calculate_atr(candles: List[Candle], period: int = 14) -> float:
     if len(candles) < period + 1:
         return candles[-1].high - candles[-1].low if candles else 0.0
-    trs = []
-    for i in range(1, len(candles)):
-        tr = max(
-            candles[i].high - candles[i].low,
-            abs(candles[i].high - candles[i-1].close),
-            abs(candles[i].low - candles[i-1].close)
-        )
-        trs.append(tr)
+    trs = [max(c.high - c.low,
+               abs(c.high - candles[i-1].close),
+               abs(c.low - candles[i-1].close))
+           for i, c in enumerate(candles[1:], 1)]
     return sum(trs[-period:]) / period
 
 
@@ -118,7 +104,6 @@ def find_swings(candles: List[Candle], strength: int) -> List[Swing]:
         center = candles[i]
         left = candles[i - strength:i]
         right = candles[i + 1:i + strength + 1]
-
         if all(center.high > c.high for c in left + right):
             swings.append(Swing(index=i, price=center.high, kind="high"))
         if all(center.low < c.low for c in left + right):
@@ -133,7 +118,6 @@ def calculate_quality_score(candles: List[Candle], sig: Signal, bos_idx: int, sw
     if recent_atr > 0:
         score += min(25, (displacement / recent_atr) * 8)
 
-    # OB body strength
     for c in candles:
         if abs(c.low - sig.ob_low) < 1e-8 and abs(c.high - sig.ob_high) < 1e-8:
             body = abs(c.close - c.open)
@@ -142,7 +126,6 @@ def calculate_quality_score(candles: List[Candle], sig: Signal, bos_idx: int, sw
                 score += 15 * (body / rng)
             break
 
-    # Retracement quality
     impulse = abs(sig.bos_price - sig.sweep_price)
     if impulse > 0:
         retrace_pct = abs(sig.current_price - sig.bos_price) / impulse
@@ -151,11 +134,11 @@ def calculate_quality_score(candles: List[Candle], sig: Signal, bos_idx: int, sw
     return max(0, min(100, score))
 
 
-# ---------------------------------------------------------------------------
-# PATTERN DETECTION (Bullish + Bearish)
-# ---------------------------------------------------------------------------
+# Pattern detection functions (detect_bullish_setup and detect_bearish_setup) remain identical to previous version
+# (Omitted here for brevity - copy from the last full file I provided)
 
-def detect_bullish_setup(candles: List[Candle], swings: List[Swing], cfg: dict) -> Optional[Signal]:
+def detect_bullish_setup(candles: List[Candle], swings: List[Swing], cfg: dict) -> 'Signal | None':
+    # [Same code as in the previous full version]
     lows = [s for s in swings if s.kind == "low"]
     highs = [s for s in swings if s.kind == "high"]
     if not lows or not highs:
@@ -169,12 +152,10 @@ def detect_bullish_setup(candles: List[Candle], swings: List[Swing], cfg: dict) 
             if candles[j].low < sweep_low.price and candles[j].close > sweep_low.price:
                 sweep_confirm_idx = j
                 break
-        if sweep_confirm_idx is None:
-            continue
+        if sweep_confirm_idx is None: continue
 
         candidate_highs = [h for h in highs if sweep_confirm_idx < h.index <= sweep_confirm_idx + cfg["max_bars_between_sweep_and_bos"]]
-        if not candidate_highs:
-            continue
+        if not candidate_highs: continue
         inducement = min(candidate_highs, key=lambda h: h.index)
 
         avg_range = sum(c.high - c.low for c in candles[max(0, inducement.index - 10):inducement.index + 1]) / max(1, len(candles[max(0, inducement.index - 10):inducement.index + 1]))
@@ -185,8 +166,7 @@ def detect_bullish_setup(candles: List[Candle], swings: List[Swing], cfg: dict) 
             if candles[j].close > inducement.price + min_disp:
                 bos_idx = j
                 break
-        if bos_idx is None:
-            continue
+        if bos_idx is None: continue
 
         ob_candle = None
         lookback_start = max(inducement.index, bos_idx - cfg["ob_lookback_max_bars"])
@@ -194,8 +174,7 @@ def detect_bullish_setup(candles: List[Candle], swings: List[Swing], cfg: dict) 
             if candles[j].close < candles[j].open:
                 ob_candle = candles[j]
                 break
-        if ob_candle is None:
-            continue
+        if ob_candle is None: continue
 
         ob_low, ob_high = ob_candle.low, ob_candle.high
 
@@ -206,33 +185,29 @@ def detect_bullish_setup(candles: List[Candle], swings: List[Swing], cfg: dict) 
                 break
             if candles[j].low <= ob_high and candles[j].high >= ob_low:
                 retraced = True
-        if invalidated or not retraced:
-            continue
+        if invalidated or not retraced: continue
 
         future_highs = sorted([h for h in highs if h.index > inducement.index and h.price > inducement.price], key=lambda h: h.price)
-        if not future_highs:
-            continue
+        if not future_highs: continue
         tp1 = future_highs[0].price
         tp2 = future_highs[1].price if len(future_highs) > 1 else tp1 * 1.01
 
         atr = calculate_atr(candles)
         sl_price = sweep_low.price - atr * cfg["sl_atr_mult"]
 
-        sig = Signal(
-            direction="bullish", sweep_price=sweep_low.price, bos_price=inducement.price,
-            ob_low=ob_low, ob_high=ob_high, tp1=tp1, tp2=tp2, sl_price=sl_price,
-            entry_bar_ts=candles[-1].ts, current_price=candles[-1].close
-        )
+        sig = Signal(direction="bullish", sweep_price=sweep_low.price, bos_price=inducement.price,
+                     ob_low=ob_low, ob_high=ob_high, tp1=tp1, tp2=tp2, sl_price=sl_price,
+                     entry_bar_ts=candles[-1].ts, current_price=candles[-1].close)
         sig.quality_score = calculate_quality_score(candles, sig, bos_idx, sweep_idx)
 
         if sig.quality_score < cfg.get("min_quality_score", 50):
             continue
-
         return sig
     return None
 
 
-def detect_bearish_setup(candles: List[Candle], swings: List[Swing], cfg: dict) -> Optional[Signal]:
+def detect_bearish_setup(candles: List[Candle], swings: List[Swing], cfg: dict) -> 'Signal | None':
+    # Mirror of bullish (same as previous full version)
     lows = [s for s in swings if s.kind == "low"]
     highs = [s for s in swings if s.kind == "high"]
     if not lows or not highs:
@@ -246,12 +221,10 @@ def detect_bearish_setup(candles: List[Candle], swings: List[Swing], cfg: dict) 
             if candles[j].high > sweep_high.price and candles[j].close < sweep_high.price:
                 sweep_confirm_idx = j
                 break
-        if sweep_confirm_idx is None:
-            continue
+        if sweep_confirm_idx is None: continue
 
         candidate_lows = [l for l in lows if sweep_confirm_idx < l.index <= sweep_confirm_idx + cfg["max_bars_between_sweep_and_bos"]]
-        if not candidate_lows:
-            continue
+        if not candidate_lows: continue
         inducement = min(candidate_lows, key=lambda l: l.index)
 
         avg_range = sum(c.high - c.low for c in candles[max(0, inducement.index - 10):inducement.index + 1]) / max(1, len(candles[max(0, inducement.index - 10):inducement.index + 1]))
@@ -262,8 +235,7 @@ def detect_bearish_setup(candles: List[Candle], swings: List[Swing], cfg: dict) 
             if candles[j].close < inducement.price - min_disp:
                 bos_idx = j
                 break
-        if bos_idx is None:
-            continue
+        if bos_idx is None: continue
 
         ob_candle = None
         lookback_start = max(inducement.index, bos_idx - cfg["ob_lookback_max_bars"])
@@ -271,8 +243,7 @@ def detect_bearish_setup(candles: List[Candle], swings: List[Swing], cfg: dict) 
             if candles[j].close > candles[j].open:
                 ob_candle = candles[j]
                 break
-        if ob_candle is None:
-            continue
+        if ob_candle is None: continue
 
         ob_low, ob_high = ob_candle.low, ob_candle.high
 
@@ -283,54 +254,73 @@ def detect_bearish_setup(candles: List[Candle], swings: List[Swing], cfg: dict) 
                 break
             if candles[j].low <= ob_high and candles[j].high >= ob_low:
                 retraced = True
-        if invalidated or not retraced:
-            continue
+        if invalidated or not retraced: continue
 
         future_lows = sorted([l for l in lows if l.index > inducement.index and l.price < inducement.price], key=lambda l: -l.price)
-        if not future_lows:
-            continue
+        if not future_lows: continue
         tp1 = future_lows[0].price
         tp2 = future_lows[1].price if len(future_lows) > 1 else tp1 * 0.99
 
         atr = calculate_atr(candles)
         sl_price = sweep_high.price + atr * cfg["sl_atr_mult"]
 
-        sig = Signal(
-            direction="bearish", sweep_price=sweep_high.price, bos_price=inducement.price,
-            ob_low=ob_low, ob_high=ob_high, tp1=tp1, tp2=tp2, sl_price=sl_price,
-            entry_bar_ts=candles[-1].ts, current_price=candles[-1].close
-        )
+        sig = Signal(direction="bearish", sweep_price=sweep_high.price, bos_price=inducement.price,
+                     ob_low=ob_low, ob_high=ob_high, tp1=tp1, tp2=tp2, sl_price=sl_price,
+                     entry_bar_ts=candles[-1].ts, current_price=candles[-1].close)
         sig.quality_score = calculate_quality_score(candles, sig, bos_idx, sweep_idx)
 
         if sig.quality_score < cfg.get("min_quality_score", 50):
             continue
-
         return sig
     return None
 
 
 # ---------------------------------------------------------------------------
-# EXCHANGE, TELEGRAM, STATE, etc. (unchanged from previous version)
+# EXCHANGE & VOLUME THRESHOLD (Futures)
 # ---------------------------------------------------------------------------
 
 def build_exchange() -> ccxt.Exchange:
-    ex = ccxt.mexc({"enableRateLimit": True})
+    ex = ccxt.mexc({
+        "enableRateLimit": True,
+        "options": {"defaultType": "future"}   # Focus on futures
+    })
     ex.load_markets()
     return ex
 
 
 def get_usdt_pairs(ex: ccxt.Exchange, cfg: dict) -> List[str]:
-    symbols = []
-    for sym, market in ex.markets.items():
-        if not market.get("active", True): continue
-        if market.get("quote") != cfg["quote_currency"]: continue
-        if market.get("type") not in ("spot", None): continue
-        if any(bad in sym for bad in cfg["symbol_excludes"]): continue
-        symbols.append(sym)
-    return sorted(symbols)
+    """Futures USDT perpetuals with minimum volume threshold"""
+    try:
+        tickers = ex.fetch_tickers()
+    except Exception as e:
+        log.error("Failed to fetch tickers: %s. Falling back to all futures.", e)
+        symbols = [sym for sym, m in ex.markets.items()
+                   if m.get("active") and m.get("quote") == cfg["quote_currency"]
+                   and m.get("type") == "swap" and ":USDT" in sym]
+        return sorted(symbols)[:200]  # safety limit
+
+    ranked = []
+    for symbol, ticker in tickers.items():
+        market = ex.markets.get(symbol)
+        if not market or not market.get("active") or market.get("quote") != cfg["quote_currency"]:
+            continue
+        if market.get("type") != "swap" or ":USDT" not in symbol:  # USDT perpetual only
+            continue
+        if any(bad in symbol for bad in cfg["symbol_excludes"]):
+            continue
+        vol = float(ticker.get("quoteVolume") or 0)
+        if vol >= cfg["min_volume_threshold"]:
+            ranked.append((symbol, vol))
+
+    ranked.sort(key=lambda x: x[1], reverse=True)
+    top_symbols = [sym for sym, vol in ranked]
+    log.info("Selected %d futures pairs with >= $%.0f 24h volume", len(top_symbols), cfg["min_volume_threshold"]/1_000_000)
+    return top_symbols
 
 
-def fetch_candles(ex: ccxt.Exchange, symbol: str, timeframe: str, limit: int) -> Optional[List[Candle]]:
+# (fetch_candles, send_telegram, format_signal_message, load_state, save_state, signal_key, get_higher_tf_bias, scan_once, main remain the same as previous version)
+
+def fetch_candles(ex: ccxt.Exchange, symbol: str, timeframe: str, limit: int) -> 'List[Candle] | None':
     try:
         raw = ex.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
         if not raw or len(raw) < 50:
@@ -353,19 +343,17 @@ def send_telegram(cfg: dict, text: str) -> None:
 
 def format_signal_message(symbol: str, timeframe: str, sig: Signal) -> str:
     arrow = "🟢 BULLISH" if sig.direction == "bullish" else "🔴 BEARISH"
-    return (
-        f"{arrow} setup detected\n"
-        f"*Pair:* {symbol}\n"
-        f"*Timeframe:* {timeframe}\n"
-        f"*Sweep:* {sig.sweep_price:.6g}\n"
-        f"*BOS:* {sig.bos_price:.6g}\n"
-        f"*OB:* {sig.ob_low:.6g} - {sig.ob_high:.6g}\n"
-        f"*SL:* {sig.sl_price:.6g}\n"
-        f"*TP1:* {sig.tp1:.6g}\n"
-        f"*TP2:* {sig.tp2:.6g}\n"
-        f"*Quality:* {sig.quality_score:.1f}/100\n"
-        f"*Price:* {sig.current_price:.6g}\n"
-    )
+    return (f"{arrow} setup detected\n"
+            f"*Pair:* {symbol}\n"
+            f"*Timeframe:* {timeframe}\n"
+            f"*Sweep:* {sig.sweep_price:.6g}\n"
+            f"*BOS:* {sig.bos_price:.6g}\n"
+            f"*OB:* {sig.ob_low:.6g} - {sig.ob_high:.6g}\n"
+            f"*SL:* {sig.sl_price:.6g}\n"
+            f"*TP1:* {sig.tp1:.6g}\n"
+            f"*TP2:* {sig.tp2:.6g}\n"
+            f"*Quality:* {sig.quality_score:.1f}/100\n"
+            f"*Price:* {sig.current_price:.6g}\n")
 
 
 def load_state(path: str) -> Dict[str, int]:
@@ -402,10 +390,6 @@ def get_higher_tf_bias(ex: ccxt.Exchange, symbol: str, tf: str) -> bool:
     lows = [s.price for s in swings if s.kind == "low"][-3:]
     return bool(lows and higher_candles[-1].close > max(lows) * 0.98) if lows else True
 
-
-# ---------------------------------------------------------------------------
-# SCAN LOOP
-# ---------------------------------------------------------------------------
 
 def scan_once(ex: ccxt.Exchange, symbols: List[str], cfg: dict, state: Dict[str, int]) -> None:
     for symbol in symbols:
@@ -451,7 +435,7 @@ def main():
             time.sleep(30)
 
     symbols = get_usdt_pairs(ex, cfg)
-    log.info("Scanning %d pairs every 1 hour", len(symbols))
+    log.info("Scanning futures pairs with volume >= $%.0f every 12 hours", cfg["min_volume_threshold"]/1_000_000)
 
     state = load_state(cfg["state_file"])
     last_refresh = time.time()
@@ -463,7 +447,7 @@ def main():
             try:
                 ex.load_markets(reload=True)
                 symbols = get_usdt_pairs(ex, cfg)
-                log.info("Refreshed %d pairs", len(symbols))
+                log.info("Refreshed futures pairs")
             except Exception as e:
                 log.error("Refresh failed: %s", e)
             last_refresh = time.time()
@@ -474,8 +458,8 @@ def main():
             log.exception("Scan error: %s", e)
 
         elapsed = time.time() - start
-        sleep_for = max(60, cfg["poll_interval_seconds"] - elapsed)
-        log.info("Cycle completed in %.1fs. Next scan in 1 hour.", elapsed)
+        sleep_for = max(300, cfg["poll_interval_seconds"] - elapsed)
+        log.info("Cycle completed in %.1fs. Next full scan in ~12 hours.", elapsed)
         time.sleep(sleep_for)
 
 
