@@ -37,9 +37,9 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 log = logging.getLogger("scanner")
 
 
-# Data structures, session helpers, calculate_atr, calculate_quality_score, 
-# detect_bearish_setup, detect_bullish_setup remain the same as previous version.
-# (Paste them from the last full code I gave you)
+# ---------------------------------------------------------------------------
+# DATA STRUCTURES
+# ---------------------------------------------------------------------------
 
 @dataclass
 class Candle:
@@ -69,8 +69,185 @@ class Signal:
     session: str = ""
 
 
-# (Include all helper functions: get_session_name, find_previous_session_extremes, calculate_atr, calculate_quality_score,
-# detect_bearish_setup, detect_bullish_setup from the previous complete response)
+# ---------------------------------------------------------------------------
+# SESSION & HELPERS
+# ---------------------------------------------------------------------------
+
+def get_session_name(dt: datetime) -> str:
+    h = dt.hour
+    if 0 <= h < 8: return "Asian"
+    if 8 <= h < 13: return "London"
+    return "New York"
+
+
+def find_previous_session_extremes(candles: List[Candle]) -> Tuple[float, float, str]:
+    if len(candles) < 100:
+        return 0.0, 0.0, ""
+    session_data: Dict[str, dict] = {}
+    for c in candles:
+        dt = datetime.fromtimestamp(c.ts / 1000, tz=timezone.utc)
+        sess = get_session_name(dt)
+        if sess not in session_data:
+            session_data[sess] = {"high": c.high, "low": c.low}
+        else:
+            session_data[sess]["high"] = max(session_data[sess]["high"], c.high)
+            session_data[sess]["low"] = min(session_data[sess]["low"], c.low)
+    sessions = list(session_data.keys())
+    if len(sessions) < 2:
+        return 0.0, 0.0, ""
+    prev = sessions[-2]
+    return session_data[prev]["high"], session_data[prev]["low"], prev
+
+
+def calculate_atr(candles: List[Candle], period: int = 14) -> float:
+    if len(candles) < period + 1:
+        return candles[-1].high - candles[-1].low if candles else 0.0
+    trs = [max(c.high - c.low, abs(c.high - candles[i-1].close), abs(c.low - candles[i-1].close))
+           for i, c in enumerate(candles[1:], 1)]
+    return sum(trs[-period:]) / period
+
+
+def calculate_quality_score(candles: List[Candle], sig: Signal, bos_idx: int) -> float:
+    score = 55.0
+    displacement = abs(sig.bos_price - sig.sweep_price)
+    atr = calculate_atr(candles[max(0, bos_idx-30):bos_idx+10])
+    if atr > 0:
+        score += min(30, (displacement / atr) * 10)
+    for c in candles:
+        if abs(c.low - sig.ob_low) < 1e-8:
+            body = abs(c.close - c.open)
+            rng = c.high - c.low
+            if rng > 0:
+                score += 15 * (body / rng)
+            break
+    return max(0, min(100, score))
+
+
+# ---------------------------------------------------------------------------
+# FULL PATTERN DETECTION
+# ---------------------------------------------------------------------------
+
+def detect_bearish_setup(candles: List[Candle], cfg: dict) -> Optional[Signal]:
+    prev_high, _, session_name = find_previous_session_extremes(candles)
+    if prev_high == 0: return None
+    n = len(candles)
+
+    sweep_idx = None
+    for j in range(n-80, n):
+        if candles[j].high > prev_high and candles[j].close < prev_high:
+            sweep_idx = j
+            break
+    if sweep_idx is None: return None
+
+    inducement_idx = None
+    for j in range(sweep_idx + 1, n):
+        if candles[j].high > max((c.high for c in candles[sweep_idx:j]), default=0):
+            inducement_idx = j
+            break
+    if inducement_idx is None: return None
+
+    bos_idx = None
+    min_disp = calculate_atr(candles) * cfg["min_bos_displacement_atr_mult"]
+    for j in range(inducement_idx + 1, n):
+        if candles[j].close < candles[inducement_idx].low - min_disp:
+            bos_idx = j
+            break
+    if bos_idx is None: return None
+
+    ob_candle = None
+    lookback_start = max(inducement_idx, bos_idx - cfg["ob_lookback_max_bars"])
+    for j in range(bos_idx - 1, lookback_start - 1, -1):
+        if candles[j].close > candles[j].open:
+            ob_candle = candles[j]
+            break
+    if ob_candle is None: return None
+
+    ob_low, ob_high = ob_candle.low, ob_candle.high
+
+    retraced = invalidated = False
+    for j in range(bos_idx + 1, n):
+        if candles[j].high > prev_high:
+            invalidated = True
+            break
+        if ob_low <= candles[j].high and candles[j].low <= ob_high:
+            retraced = True
+    if invalidated or not retraced: return None
+
+    atr = calculate_atr(candles)
+    sig = Signal(
+        direction="bearish", sweep_price=prev_high, bos_price=candles[inducement_idx].high,
+        ob_low=ob_low, ob_high=ob_high,
+        tp1=candles[bos_idx].close * 0.985, tp2=candles[bos_idx].close * 0.96,
+        sl_price=prev_high + atr * cfg["sl_atr_mult"],
+        entry_bar_ts=candles[-1].ts, current_price=candles[-1].close, session=session_name
+    )
+    sig.quality_score = calculate_quality_score(candles, sig, bos_idx)
+    if sig.quality_score < cfg["min_quality_score"]: return None
+    return sig
+
+
+def detect_bullish_setup(candles: List[Candle], cfg: dict) -> Optional[Signal]:
+    _, prev_low, session_name = find_previous_session_extremes(candles)
+    if prev_low == 0: return None
+    n = len(candles)
+
+    sweep_idx = None
+    for j in range(n-80, n):
+        if candles[j].low < prev_low and candles[j].close > prev_low:
+            sweep_idx = j
+            break
+    if sweep_idx is None: return None
+
+    inducement_idx = None
+    for j in range(sweep_idx + 1, n):
+        if candles[j].low < min((c.low for c in candles[sweep_idx:j]), default=float('inf')):
+            inducement_idx = j
+            break
+    if inducement_idx is None: return None
+
+    bos_idx = None
+    min_disp = calculate_atr(candles) * cfg["min_bos_displacement_atr_mult"]
+    for j in range(inducement_idx + 1, n):
+        if candles[j].close > candles[inducement_idx].high + min_disp:
+            bos_idx = j
+            break
+    if bos_idx is None: return None
+
+    ob_candle = None
+    lookback_start = max(inducement_idx, bos_idx - cfg["ob_lookback_max_bars"])
+    for j in range(bos_idx - 1, lookback_start - 1, -1):
+        if candles[j].close < candles[j].open:
+            ob_candle = candles[j]
+            break
+    if ob_candle is None: return None
+
+    ob_low, ob_high = ob_candle.low, ob_candle.high
+
+    retraced = invalidated = False
+    for j in range(bos_idx + 1, n):
+        if candles[j].low < prev_low:
+            invalidated = True
+            break
+        if ob_low <= candles[j].high and candles[j].low <= ob_high:
+            retraced = True
+    if invalidated or not retraced: return None
+
+    atr = calculate_atr(candles)
+    sig = Signal(
+        direction="bullish", sweep_price=prev_low, bos_price=candles[inducement_idx].low,
+        ob_low=ob_low, ob_high=ob_high,
+        tp1=candles[bos_idx].close * 1.015, tp2=candles[bos_idx].close * 1.04,
+        sl_price=prev_low - atr * cfg["sl_atr_mult"],
+        entry_bar_ts=candles[-1].ts, current_price=candles[-1].close, session=session_name
+    )
+    sig.quality_score = calculate_quality_score(candles, sig, bos_idx)
+    if sig.quality_score < cfg["min_quality_score"]: return None
+    return sig
+
+
+# ---------------------------------------------------------------------------
+# EXCHANGE & MAIN
+# ---------------------------------------------------------------------------
 
 def build_exchange() -> ccxt.Exchange:
     ex = ccxt.mexc({"enableRateLimit": True, "options": {"defaultType": "future"}})
@@ -79,38 +256,30 @@ def build_exchange() -> ccxt.Exchange:
 
 
 def get_usdt_pairs(ex: ccxt.Exchange, cfg: dict) -> List[str]:
-    """Try to get all futures pairs with volume threshold, fallback to good list"""
     try:
-        tickers = ex.fetch_tickers()
-        if tickers:
-            ranked = []
-            for sym, t in tickers.items():
-                m = ex.markets.get(sym)
-                if m and m.get("active") and m.get("quote") == "USDT" and m.get("type") == "swap":
-                    vol = float(t.get("quoteVolume") or 0)
-                    if vol >= cfg["min_volume_threshold"]:
-                        ranked.append((sym, vol))
-            if ranked:
-                ranked.sort(key=lambda x: x[1], reverse=True)
-                symbols = [s for s, _ in ranked]
-                log.info("Loaded %d futures pairs above $%d volume", len(symbols), cfg["min_volume_threshold"]//1_000_000)
-                return symbols[:300]  # cap for performance
+        tickers = ex.fetch_tickers() or {}
+        ranked = []
+        for sym, t in tickers.items():
+            m = ex.markets.get(sym)
+            if m and m.get("active") and m.get("quote") == "USDT" and m.get("type") == "swap":
+                vol = float(t.get("quoteVolume") or 0)
+                if vol >= cfg["min_volume_threshold"]:
+                    ranked.append((sym, vol))
+        if ranked:
+            ranked.sort(key=lambda x: x[1], reverse=True)
+            log.info("Loaded %d futures pairs above volume threshold", len(ranked))
+            return [s for s, _ in ranked[:300]]
     except Exception as e:
-        log.error("Ticker fetch failed: %s. Using expanded fallback list.", e)
+        log.error("Ticker fetch failed: %s. Using fallback.", e)
 
-    # Expanded high-volume fallback
     fallback = [
         "BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT", "XRP/USDT:USDT",
         "BNB/USDT:USDT", "DOGE/USDT:USDT", "TON/USDT:USDT", "ADA/USDT:USDT",
-        "AVAX/USDT:USDT", "TRX/USDT:USDT", "SHIB/USDT:USDT", "LINK/USDT:USDT",
-        "SUI/USDT:USDT", "NEAR/USDT:USDT", "HBAR/USDT:USDT"
+        "AVAX/USDT:USDT", "TRX/USDT:USDT", "SHIB/USDT:USDT", "LINK/USDT:USDT"
     ]
     log.info("Using fallback list of %d major futures pairs", len(fallback))
     return fallback
 
-
-# Rest of the code (fetch_candles, send_telegram, format_signal_message, load_state, save_state, signal_key, scan_once, main) 
-# — same as the last working version I provided.
 
 def fetch_candles(ex: ccxt.Exchange, symbol: str, timeframe: str, limit: int) -> Optional[List[Candle]]:
     try:
@@ -143,8 +312,6 @@ def format_signal_message(symbol: str, tf: str, sig: Signal) -> str:
 *TP1:* {sig.tp1:.2f}
 *Quality:* {sig.quality_score:.1f}/100"""
 
-
-# load_state, save_state, signal_key, scan_once, main functions (copy from previous full code)
 
 def load_state(path: str) -> Dict[str, int]:
     if os.path.exists(path):
@@ -208,6 +375,7 @@ def main():
             try:
                 ex.load_markets(reload=True)
                 symbols = get_usdt_pairs(ex, cfg)
+                log.info("Refreshed symbol list")
             except Exception as e:
                 log.error("Refresh failed: %s", e)
             last_refresh = time.time()
