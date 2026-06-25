@@ -18,17 +18,17 @@ CONFIG = {
     "telegram_chat_id": "1405093484",
 
     "timeframes": ["15m", "1h", "4h"],
-    "candle_limit": 400,
+    "candle_limit": 500,
     "poll_interval_seconds": 12 * 3600,
     "symbol_refresh_interval_seconds": 6 * 3600,
     "per_symbol_delay_seconds": 0.25,
 
     "min_volume_threshold": 2_000_000,
-    "min_quality_score": 55,
+    "min_quality_score": 58,
     "sl_atr_mult": 1.0,
-    "max_bars_between_sweep_and_bos": 40,
+    "max_bars_between_sweep_and_bos": 50,
     "ob_lookback_max_bars": 12,
-    "min_bos_displacement_atr_mult": 0.6,
+    "min_bos_displacement_atr_mult": 0.65,
 
     "state_file": "scanner_state.json",
 }
@@ -70,7 +70,7 @@ class Signal:
 
 
 # ---------------------------------------------------------------------------
-# SESSION & HELPERS
+# SESSION HELPERS (Multi-Session)
 # ---------------------------------------------------------------------------
 
 def get_session_name(dt: datetime) -> str:
@@ -80,8 +80,8 @@ def get_session_name(dt: datetime) -> str:
     return "New York"
 
 
-def find_previous_session_extremes(candles: List[Candle]) -> Tuple[float, float, str]:
-    if len(candles) < 100:
+def find_significant_session_extremes(candles: List[Candle], max_sessions: int = 3) -> Tuple[float, float, str]:
+    if len(candles) < 150:
         return 0.0, 0.0, ""
     session_data: Dict[str, dict] = {}
     for c in candles:
@@ -92,11 +92,16 @@ def find_previous_session_extremes(candles: List[Candle]) -> Tuple[float, float,
         else:
             session_data[sess]["high"] = max(session_data[sess]["high"], c.high)
             session_data[sess]["low"] = min(session_data[sess]["low"], c.low)
-    sessions = list(session_data.keys())
-    if len(sessions) < 2:
+
+    recent_sessions = list(session_data.items())[-max_sessions:]
+    if not recent_sessions:
         return 0.0, 0.0, ""
-    prev = sessions[-2]
-    return session_data[prev]["high"], session_data[prev]["low"], prev
+
+    best_high = max(data["high"] for _, data in recent_sessions)
+    best_low = min(data["low"] for _, data in recent_sessions)
+    session_name = recent_sessions[-1][0]
+
+    return best_high, best_low, session_name
 
 
 def calculate_atr(candles: List[Candle], period: int = 14) -> float:
@@ -124,15 +129,16 @@ def calculate_quality_score(candles: List[Candle], sig: Signal, bos_idx: int) ->
 
 
 # ---------------------------------------------------------------------------
-# PATTERN DETECTION (Full)
+# PATTERN DETECTION
 # ---------------------------------------------------------------------------
 
 def detect_bearish_setup(candles: List[Candle], cfg: dict) -> Optional[Signal]:
-    prev_high, _, session_name = find_previous_session_extremes(candles)
+    prev_high, _, session_name = find_significant_session_extremes(candles)
     if prev_high == 0: return None
     n = len(candles)
+
     sweep_idx = None
-    for j in range(n-80, n):
+    for j in range(n-100, n):
         if candles[j].high > prev_high and candles[j].close < prev_high:
             sweep_idx = j
             break
@@ -186,11 +192,12 @@ def detect_bearish_setup(candles: List[Candle], cfg: dict) -> Optional[Signal]:
 
 
 def detect_bullish_setup(candles: List[Candle], cfg: dict) -> Optional[Signal]:
-    _, prev_low, session_name = find_previous_session_extremes(candles)
+    _, prev_low, session_name = find_significant_session_extremes(candles)
     if prev_low == 0: return None
     n = len(candles)
+
     sweep_idx = None
-    for j in range(n-80, n):
+    for j in range(n-100, n):
         if candles[j].low < prev_low and candles[j].close > prev_low:
             sweep_idx = j
             break
@@ -244,7 +251,7 @@ def detect_bullish_setup(candles: List[Candle], cfg: dict) -> Optional[Signal]:
 
 
 # ---------------------------------------------------------------------------
-# EXCHANGE - BOTH SPOT + FUTURES
+# EXCHANGE, TELEGRAM, MAIN
 # ---------------------------------------------------------------------------
 
 def build_exchange() -> ccxt.Exchange:
@@ -254,7 +261,6 @@ def build_exchange() -> ccxt.Exchange:
 
 
 def get_usdt_pairs(ex: ccxt.Exchange, cfg: dict) -> List[str]:
-    """Scan BOTH spot and futures with volume threshold"""
     try:
         tickers = ex.fetch_tickers() or {}
         ranked = []
@@ -262,35 +268,31 @@ def get_usdt_pairs(ex: ccxt.Exchange, cfg: dict) -> List[str]:
             m = ex.markets.get(sym)
             if not m or not m.get("active") or m.get("quote") != "USDT":
                 continue
-            # Accept both spot and futures (swap)
             if m.get("type") not in ("spot", "swap"):
                 continue
             vol = float(t.get("quoteVolume") or 0)
             if vol >= cfg["min_volume_threshold"]:
                 ranked.append((sym, vol))
-
         if ranked:
             ranked.sort(key=lambda x: x[1], reverse=True)
             symbols = [s for s, _ in ranked[:300]]
-            log.info("✅ Loaded %d pairs (spot + futures) above $2M volume", len(symbols))
+            log.info("✅ Loaded %d pairs (spot+futures) above $2M", len(symbols))
             return symbols
     except Exception as e:
         log.warning("Ticker fetch failed: %s. Using fallback.", e)
 
-    # Fallback list (mix of spot & futures)
     fallback = [
-        "BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT",
-        "BNB/USDT", "DOGE/USDT", "TON/USDT", "ADA/USDT",
-        "BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT"
+        "BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT", "BNB/USDT", "DOGE/USDT",
+        "BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT", "XRP/USDT:USDT"
     ]
-    log.info("Using fallback list of %d pairs", len(fallback))
+    log.info("Using fallback %d pairs", len(fallback))
     return fallback
 
 
 def fetch_candles(ex: ccxt.Exchange, symbol: str, timeframe: str, limit: int) -> Optional[List[Candle]]:
     try:
         raw = ex.fetch_ohlcv(symbol, timeframe, limit=limit)
-        if not raw or len(raw) < 100:
+        if not raw or len(raw) < 150:
             return None
         return [Candle(r[0], r[1], r[2], r[3], r[4], r[5]) for r in raw]
     except Exception as e:
@@ -298,7 +300,6 @@ def fetch_candles(ex: ccxt.Exchange, symbol: str, timeframe: str, limit: int) ->
         return None
 
 
-# Telegram, State, Scan, Main (unchanged)
 def send_telegram(cfg: dict, text: str) -> None:
     try:
         requests.post(f"https://api.telegram.org/bot{cfg['telegram_bot_token']}/sendMessage",
@@ -313,10 +314,10 @@ def format_signal_message(symbol: str, tf: str, sig: Signal) -> str:
 *Pair:* {symbol}
 *TF:* {tf}
 *Session:* {sig.session}
-*Sweep:* {sig.sweep_price:.2f}
-*OB:* {sig.ob_low:.2f} - {sig.ob_high:.2f}
-*SL:* {sig.sl_price:.2f}
-*TP1:* {sig.tp1:.2f}
+*Sweep:* {sig.sweep_price:.6g}
+*OB:* {sig.ob_low:.6g} - {sig.ob_high:.6g}
+*SL:* {sig.sl_price:.6g}
+*TP1:* {sig.tp1:.6g}
 *Quality:* {sig.quality_score:.1f}/100"""
 
 
@@ -371,7 +372,7 @@ def main():
     cfg = CONFIG
     ex = build_exchange()
     symbols = get_usdt_pairs(ex, cfg)
-    log.info("Scanning %d spot + futures pairs every 12h", len(symbols))
+    log.info("Scanning %d spot+futures pairs every 12h", len(symbols))
 
     state = load_state(cfg["state_file"])
     last_refresh = time.time()
